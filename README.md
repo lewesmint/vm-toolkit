@@ -363,7 +363,7 @@ KVM acceleration can be used
 
 ## 📝 Notes
 
-- **Performance**: ~5-10x slower than native due to TCG emulation
+- **Performance**: x86_64 VMs run via emulation (slower), ARM64 VMs use native acceleration (faster)
 - **Sudo required**: vmnet framework needs elevated privileges
 - **MAC addresses**: Automatically generated based on VM name
 - **Cloud images**: Cached in `.cache/` directory
