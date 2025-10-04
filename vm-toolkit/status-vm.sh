@@ -133,7 +133,7 @@ get_detailed_status() {
 
   if [ -f "$vm_dir/cloud-init/user-data" ]; then
     hostname=$(grep "^hostname:" "$vm_dir/cloud-init/user-data" | cut -d' ' -f2 || echo "$vm_name")
-    username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | cut -d' ' -f4 || echo "ubuntu")
+    username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | sed 's/.*name: *//' || echo "ubuntu")
   fi
 
   if [ -f "$vm_dir/${vm_name}.qcow2" ]; then
@@ -213,7 +213,7 @@ show_summary_table() {
       if [ -n "$ip" ] && [ "$ip" != "N/A" ]; then
         local username="ubuntu"
         if [ -f "$vm_dir/cloud-init/user-data" ]; then
-          username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | cut -d' ' -f4 || echo "ubuntu")
+          username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | sed 's/.*name: *//' || echo "ubuntu")
         fi
 
         # Quick SSH connectivity test
