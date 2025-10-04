@@ -197,7 +197,7 @@ The toolkit maintains a registry of all VMs in `.vm-registry.json`:
 vm list                    # Show all VMs with status
 vm status --name myvm      # Detailed status for specific VM
 vm status --json           # JSON output for scripting
-vm sync                    # Sync registry with actual state
+vm sync                    # Sync registry with actual state (removes phantom VMs)
 ```
 
 ## 🏗️ Multi-Architecture Support

@@ -361,21 +361,33 @@ sync_registry() {
 
   log "Syncing registry with actual VM state..."
 
-  # Update status for all registered VMs
+  # Update status for all registered VMs and remove phantom VMs
+  local phantom_vms=()
   for vm_name in $(list_vms); do
     local status
     status=$(get_vm_status "$vm_name")
     local ip=""
     local pid=""
 
-    if [ "$status" = "running" ]; then
+    if [ "$status" = "missing" ]; then
+      # VM directory doesn't exist - mark as phantom for removal
+      phantom_vms+=("$vm_name")
+      warn "Found phantom VM in registry: $vm_name (directory missing)"
+    elif [ "$status" = "running" ]; then
       ip=$(get_vm_ip "$vm_name")
       if [ -f "${VM_BASE_DIR}/$vm_name/${vm_name}.pid" ]; then
         pid=$(cat "${VM_BASE_DIR}/$vm_name/${vm_name}.pid")
       fi
+      update_vm_status "$vm_name" "$status" "$pid" "$ip"
+    else
+      update_vm_status "$vm_name" "$status" "$pid" "$ip"
     fi
+  done
 
-    update_vm_status "$vm_name" "$status" "$pid" "$ip"
+  # Remove phantom VMs from registry
+  for vm_name in "${phantom_vms[@]}"; do
+    log "Removing phantom VM from registry: $vm_name"
+    unregister_vm "$vm_name"
   done
 
   # Discover unregistered VMs
