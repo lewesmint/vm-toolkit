@@ -52,8 +52,10 @@ if [ -f "$USER_CONFIG" ]; then
 fi
 
 # Paths - Use configuration or fallback to defaults
-# Default to vm-toolkit-data in home directory for new installations
-VM_PROJECT_DIR="${VM_PROJECT_DIR:-${HOME}/vm-toolkit-data}"
+# Default to vm-toolkit-data in project root directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+VM_PROJECT_DIR="${VM_PROJECT_DIR:-${PROJECT_ROOT}/vm-toolkit-data}"
 VM_BASE_DIR="${VM_BASE_DIR:-${VM_PROJECT_DIR}/vms}"
 export CLOUD_IMAGE_CACHE="${CLOUD_IMAGE_CACHE:-${VM_PROJECT_DIR}/.cache}"
 
@@ -392,6 +394,60 @@ check_root() {
     error "Please run with sudo: sudo $0 $*"
     exit 1
   fi
+}
+
+# Ensure we have valid sudo credentials for commands that need them
+ensure_sudo() {
+  # Check if we already have valid sudo credentials
+  if sudo -n true 2>/dev/null; then
+    return 0
+  fi
+
+  # No valid sudo session, prompt for password
+  echo "🔐 This operation requires sudo access for VM networking (vmnet)."
+  echo "Please enter your password to continue:"
+
+  if ! sudo -v; then
+    error "Failed to obtain sudo credentials"
+    exit 1
+  fi
+
+  log "✅ Sudo credentials obtained"
+}
+
+# Prompt user to create a VM if it doesn't exist
+prompt_create_vm() {
+  local vm_name="$1"
+
+  echo "❓ VM '$vm_name' does not exist."
+  echo -n "Would you like to create it now? [y/N]: "
+  read -r response
+
+  case "$response" in
+    [yY]|[yY][eE][sS])
+      log "Creating VM '$vm_name'..."
+
+      # Use the create-vm.sh script to create the VM
+      local create_script="$(dirname "${BASH_SOURCE[0]}")/create-vm.sh"
+      if [ ! -f "$create_script" ]; then
+        error "Create script not found: $create_script"
+        exit 1
+      fi
+
+      # Run create script with the VM name
+      if "$create_script" --name "$vm_name"; then
+        log "✅ VM '$vm_name' created successfully"
+        return 0
+      else
+        error "Failed to create VM '$vm_name'"
+        exit 1
+      fi
+      ;;
+    *)
+      log "VM creation cancelled"
+      exit 1
+      ;;
+  esac
 }
 
 # Logging functions

@@ -91,9 +91,10 @@ cd vm-toolkit
 ./install.sh --install-dir /opt/vm-toolkit --data-dir /var/vm-data
 ```
 
-**📦 Archive Installation**: The toolkit is designed to work from any directory. Download the archive, extract it anywhere, and run the installer. Your VMs and data will be stored in a separate configurable location (default: `~/vm-toolkit-data`).
+**📦 Archive Installation**: The toolkit is designed to work from any directory. Download the archive, extract it anywhere, and run the installer. Your VMs and data will be stored in a configurable location (default: `./vm-toolkit-data` in the project directory).
 
 For detailed installation options, see [INSTALL.md](INSTALL.md)
+For recent changes and improvements, see [CHANGELOG.md](CHANGELOG.md)
 
 ### 2. Prerequisites
 
@@ -260,38 +261,27 @@ VMs use **true bridge networking** via macOS vmnet framework:
 
 ## 📁 Project Structure
 
-### Toolkit Installation (can be anywhere)
+### Complete Project Structure
 ```
-vm-toolkit/                         # Toolkit installation directory
+vm-toolkit/                         # Project root directory
 ├── install.sh                     # Installation script
 ├── README.md                      # This file
 ├── INSTALL.md                     # Detailed installation guide
 ├── vm                             # Main VM command (symlinked to ~/bin/vm)
-└── vm-toolkit/                    # Core toolkit scripts
-    ├── create-vm.sh               # VM creation
-    ├── destroy-vm.sh              # VM destruction
-    ├── start-vm.sh                # VM startup
-    ├── status-vm.sh               # Status checking
-    ├── stop-vm.sh                 # VM shutdown
-    ├── vm-config.sh               # Configuration system
-    ├── vm-registry.sh             # Registry management
-    └── examples/
-        └── vm-toolkit-config.example # Configuration template
-```
-
-### Data Directory (configurable location)
-```
-~/vm-toolkit-data/                 # Default data directory (configurable)
-├── .cache/                        # Cloud image cache
-│   └── noble-server-cloudimg-amd64.img
-├── .vm-registry.json             # VM registry database
-└── vms/                           # VM storage
-    ├── vm1/                       # Individual VM directories
-    │   ├── vm1.qcow2              # VM disk image
-    │   ├── vm1.pid                # Process ID file
-    │   └── cloud-init/            # Cloud-init configuration
-    └── vm2/
-        └── ...
+├── vm-toolkit/                    # Core toolkit scripts
+│   ├── create-vm.sh               # VM creation
+│   ├── destroy-vm.sh              # VM destruction
+│   ├── start-vm.sh                # VM startup
+│   ├── status-vm.sh               # Status checking
+│   ├── stop-vm.sh                 # VM shutdown
+│   ├── vm-config.sh               # Configuration system
+│   ├── vm-registry.sh             # Registry management
+│   └── examples/
+│       └── vm-toolkit-config.example # Configuration template
+└── vm-toolkit-data/               # VM data directory (default location)
+    ├── .cache/                    # Cloud image cache
+    ├── .vm-registry.json          # VM registry database
+    └── vms/                       # Individual VM directories
 ```
 
 ### Configuration
@@ -329,6 +319,22 @@ vm start --name test2 &
 # Check status
 vm list
 ```
+
+## 🏗️ Architecture
+
+### Registry Design (v1.1+)
+The VM registry has been redesigned for better reliability:
+- **Static configuration only**: Registry stores only immutable VM properties (name, disk size, creation time, MAC address)
+- **Live status computation**: VM status is computed in real-time from system state (process running, IP available, SSH ready)
+- **No stale data**: Status always reflects current reality, not cached values
+- **Simplified sync**: Registry sync only removes VMs with missing directories
+
+### Status States
+- `missing` → VM directory doesn't exist
+- `stopped` → Directory exists, no process running
+- `initializing` → Process running, no IP yet
+- `booting` → Process running, has IP, SSH not ready
+- `running` → Process running, has IP, SSH ready
 
 ## 🔧 Troubleshooting
 

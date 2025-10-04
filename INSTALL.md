@@ -43,7 +43,7 @@ cd vm-toolkit
 | Component | Default Location | Configurable |
 |-----------|------------------|--------------|
 | Toolkit Code | Current directory | `--install-dir` |
-| VM Data | `~/vm-toolkit-data` | `--data-dir` |
+| VM Data | `./vm-toolkit-data` | `--data-dir` |
 | Configuration | `~/.vm-toolkit-config` | No |
 | Command Link | `~/bin/vm` | No |
 
@@ -54,7 +54,7 @@ cd vm-toolkit
 After installation, your data directory will contain:
 
 ```
-~/vm-toolkit-data/           # Data directory (configurable)
+vm-toolkit-data/             # Data directory (in project root by default)
 ├── .cache/                  # Cloud image cache
 ├── .vm-registry.json        # VM registry database
 └── vms/                     # Individual VM directories
@@ -99,6 +99,16 @@ sudo ./install.sh --install-dir /opt/vm-toolkit --data-dir /var/vm-data
 cp /opt/vm-toolkit/vm-toolkit/examples/vm-toolkit-config.example ~/.vm-toolkit-config
 # Edit ~/.vm-toolkit-config to point to shared data directory
 ```
+
+### Data Directory Location
+
+**New Default (v1.1+)**: VM data is stored in `./vm-toolkit-data` within the project directory by default. This provides:
+- **Cleaner project structure**: All VM data contained within the project
+- **Easier backup**: Single directory contains everything
+- **Better portability**: Moving the project moves all data with it
+- **Simpler organization**: Data stays with the toolkit
+
+**Legacy installations** that used `~/vm-toolkit-data` continue to work via user configuration overrides.
 
 ### Portable Installation
 
@@ -155,7 +165,7 @@ rm ~/bin/vm
 rm ~/.vm-toolkit-config
 
 # Remove data directory (WARNING: deletes all VMs!)
-rm -rf ~/vm-toolkit-data
+rm -rf ./vm-toolkit-data  # or ~/vm-toolkit-data for older installations
 
 # Remove toolkit code
 rm -rf /path/to/vm-toolkit
@@ -181,10 +191,10 @@ source ~/.bashrc
 
 ```bash
 # Fix ownership of data directory
-sudo chown -R $USER:$USER ~/vm-toolkit-data
+sudo chown -R $USER:$USER ./vm-toolkit-data
 
 # Fix permissions
-chmod -R 755 ~/vm-toolkit-data
+chmod -R 755 ./vm-toolkit-data
 ```
 
 ### Configuration Issues
@@ -206,13 +216,13 @@ If you have an existing installation in `~/vmq`:
 
 ```bash
 # Backup existing VMs
-cp -r ~/vmq/vms ~/vm-toolkit-data/
+cp -r ~/vmq/vms ./vm-toolkit-data/
 
 # Copy registry
-cp ~/vmq/.vm-registry.json ~/vm-toolkit-data/
+cp ~/vmq/.vm-registry.json ./vm-toolkit-data/
 
 # Copy cache
-cp -r ~/vmq/.cache ~/vm-toolkit-data/
+cp -r ~/vmq/.cache ./vm-toolkit-data/
 
 # Update registry paths (if needed)
 vm sync

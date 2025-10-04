@@ -52,11 +52,69 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Parse common arguments and set up VM operation
-parse_vm_operation_args "${REMAINING_ARGS[@]}"
+# Parse common arguments but handle missing VMs specially for start command
+# First, extract VM name without validating existence
+VM_NAME=""
+SHOW_HELP=false
 
-# Check if running as root (required for vmnet)
-check_root
+# Check if first argument is a VM name (not an option)
+if [[ ${#REMAINING_ARGS[@]} -gt 0 && "${REMAINING_ARGS[0]}" != --* ]]; then
+  VM_NAME="${REMAINING_ARGS[0]}"
+  REMAINING_ARGS=("${REMAINING_ARGS[@]:1}")  # Remove first element
+fi
+
+# Parse remaining arguments for --name option
+while [[ ${#REMAINING_ARGS[@]} -gt 0 ]]; do
+  case "${REMAINING_ARGS[0]}" in
+  --name)
+    if [[ ${#REMAINING_ARGS[@]} -lt 2 ]]; then
+      error "Option --name requires a value"
+      show_usage
+      exit 1
+    fi
+    if [[ -n "$VM_NAME" ]]; then
+      error "VM name specified multiple times"
+      show_usage
+      exit 1
+    fi
+    VM_NAME="${REMAINING_ARGS[1]}"
+    REMAINING_ARGS=("${REMAINING_ARGS[@]:2}")  # Remove two elements
+    ;;
+  --help|-h)
+    SHOW_HELP=true
+    break
+    ;;
+  *)
+    error "Unknown option: ${REMAINING_ARGS[0]}"
+    show_usage
+    exit 1
+    ;;
+  esac
+done
+
+if [[ "$SHOW_HELP" == true ]]; then
+  show_usage
+  exit 0
+fi
+
+if [[ -z "$VM_NAME" ]]; then
+  error "VM name is required"
+  show_usage
+  exit 1
+fi
+
+# Check if VM exists, if not prompt to create it
+VM_DIR=$(get_vm_dir "$VM_NAME")
+if [ ! -d "$VM_DIR" ]; then
+  prompt_create_vm "$VM_NAME"
+  # After creation, VM_DIR should exist
+  VM_DIR=$(get_vm_dir "$VM_NAME")
+fi
+
+
+
+# Ensure we have sudo credentials for QEMU vmnet operations
+ensure_sudo
 
 # Set defaults
 VM_BRIDGE_IF="${VM_BRIDGE_IF:-$(get_bridge_if)}"
@@ -118,38 +176,42 @@ if [ "$SHOW_CONSOLE" = true ]; then
   # Set environment variables to avoid macOS Objective-C fork issues
   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
   # Use direct execution instead of exec to avoid macOS fork issues
-  "${QEMU_CMD[@]}"
+  # Run QEMU with sudo for vmnet access, preserving environment
+  export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+  sudo -E "${QEMU_CMD[@]}"
 else
   # Background mode
   QEMU_CMD+=(-pidfile "${VM_NAME}.pid" -qmp "unix:${VM_NAME}.qmp,server,nowait" -display none -serial file:console.log -daemonize)
 
   log "📋 VM will start in background"
-  log "📄 Console output: $VM_NAME/console.log"
+  log "📄 Console output: $(pwd)/console.log"
   log ""
 
   export IFACE="$VM_BRIDGE_IF"
   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-  "${QEMU_CMD[@]}"
+  # Run QEMU with sudo for vmnet access, preserving environment
+  sudo -E "${QEMU_CMD[@]}"
 
   # Wait a moment for PID file to be created
   sleep 2
 
   if [ -f "${VM_NAME}.pid" ]; then
-    # Fix ownership if running as root via sudo
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-      chown "$SUDO_USER:$(id -gn "$SUDO_USER")" "${VM_NAME}.pid" "${VM_NAME}.qmp" console.log 2>/dev/null || true
-    fi
+    # Fix ownership of files created by sudo QEMU process
+    # Since QEMU ran with sudo, these files will be owned by root
+    current_user=$(whoami)
+    current_group=$(id -gn)
+    sudo chown "$current_user:$current_group" "${VM_NAME}.pid" "${VM_NAME}.qmp" console.log 2>/dev/null || true
 
     PID=$(cat "${VM_NAME}.pid")
 
-    # Update registry with running status
-    update_vm_status "$VM_NAME" "running" "$PID" ""
+    # No registry update needed - status computed live
 
     log "✅ VM '$VM_NAME' started successfully (PID: $PID)"
     log ""
     log "Next steps:"
     log "  - Check status: vm status $VM_NAME"
-    log "  - View console: tail -f $VM_NAME/console.log"
+    log "  - View console: tail -f $(pwd)/console.log"
+    log "  - Interactive console: vm console $VM_NAME"
     log "  - Stop VM: vm stop $VM_NAME"
   else
     error "Failed to start VM '$VM_NAME'"

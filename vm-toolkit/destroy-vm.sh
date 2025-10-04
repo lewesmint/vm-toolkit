@@ -60,11 +60,7 @@ if [ -f "$VM_DIR/${VM_NAME}.pid" ]; then
   fi
 fi
 
-# Get VM info for confirmation
-DISK_SIZE="unknown"
-if [ -f "$VM_DIR/${VM_NAME}.qcow2" ]; then
-  DISK_SIZE=$(qemu-img info "$VM_DIR/${VM_NAME}.qcow2" | grep "virtual size" | cut -d'(' -f2 | cut -d' ' -f1 || echo "unknown")
-fi
+# No need for disk size check - just destroy
 
 # Confirmation prompt
 if [ "$FORCE_DESTROY" = false ]; then
@@ -73,7 +69,6 @@ if [ "$FORCE_DESTROY" = false ]; then
   echo "VM Details:"
   echo "  - Name: $VM_NAME"
   echo "  - Directory: $VM_DIR"
-  echo "  - Disk size: $DISK_SIZE"
   echo ""
   echo "Files to be deleted:"
   find "$VM_DIR" -type f | sed 's/^/  - /'

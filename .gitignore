@@ -19,6 +19,7 @@ OLD/
 
 # VM data directories (contains actual VM instances)
 vms/
+vm-toolkit-data/
 
 # Analysis and report files (generated documentation)
 vm-toolkit-analysis.md

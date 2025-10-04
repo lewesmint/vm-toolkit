@@ -32,6 +32,7 @@ Commands:
   pause                 Pause a running VM
   resume                Resume a paused VM
   status                Show detailed VM status with live checking
+  console               Connect to a running VM's console
   list                  Quick list of all VMs (fast, registry-only)
   destroy               Completely destroy a VM and all its data
   sync                  Sync registry with actual VM state
@@ -77,14 +78,8 @@ case "$COMMAND" in
   exec "$TOOLKIT_DIR/create-vm.sh" "$@"
   ;;
 "start")
-  # Start requires root for vmnet access
-  if [ "$EUID" -ne 0 ]; then
-    error "VM start requires root privileges for vmnet access"
-    error "Please run: sudo $0 start $*"
-    exit 1
-  else
-    exec "$TOOLKIT_DIR/start-vm.sh" "$@"
-  fi
+  # Start command handles its own sudo requirements
+  exec "$TOOLKIT_DIR/start-vm.sh" "$@"
   ;;
 "stop")
   exec "$TOOLKIT_DIR/stop-vm.sh" "$@"
@@ -97,6 +92,9 @@ case "$COMMAND" in
   ;;
 "status")
   exec "$TOOLKIT_DIR/status-vm.sh" "$@"
+  ;;
+"console")
+  exec "$TOOLKIT_DIR/console-vm.sh" "$@"
   ;;
 "list")
   exec "$TOOLKIT_DIR/list-vms.sh" "$@"

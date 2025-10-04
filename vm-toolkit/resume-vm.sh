@@ -18,8 +18,8 @@ show_usage() {
 # Parse arguments and set up VM operation
 parse_vm_operation_args "$@"
 
-# Ensure VM is running
-ensure_vm_running "$VM_NAME" "$VM_DIR"
+# Ensure VM is in paused state
+ensure_vm_state_paused "$VM_NAME" "$VM_DIR"
 PID=$(get_vm_pid "$VM_NAME" "$VM_DIR")
 
 log "Resuming VM: $VM_NAME (PID: $PID)"
@@ -27,8 +27,7 @@ log "Resuming VM: $VM_NAME (PID: $PID)"
 # Resume via QMP if available
 log "Sending resume command via QMP..."
 if qmp_cont "$VM_DIR" "$VM_NAME"; then
-  # Update registry
-  update_vm_status "$VM_NAME" "running" "$PID" ""
+  # No registry update needed - status computed live
 
   log "✅ VM '$VM_NAME' resumed successfully"
   log ""

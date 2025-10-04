@@ -136,9 +136,8 @@ get_detailed_status() {
     username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | sed 's/.*name: *//' || echo "ubuntu")
   fi
 
-  if [ -f "$vm_dir/${vm_name}.qcow2" ]; then
-    disk_size=$(qemu-img info "$vm_dir/${vm_name}.qcow2" | grep "virtual size" | cut -d'(' -f2 | cut -d' ' -f1 || echo "unknown")
-  fi
+  # Disk size available from registry (set during creation)
+  disk_size=$(jq -r ".vms[\"$vm_name\"].disk_size // \"unknown\"" "$REGISTRY_FILE" 2>/dev/null || echo "unknown")
 
   if [ -f "$vm_dir/${vm_name}-base.img" ]; then
     ubuntu_version=$(basename "$vm_dir/${vm_name}-base.img" | cut -d'-' -f1)
@@ -180,7 +179,7 @@ EOF
     echo "  Directory: $vm_dir"
 
     if [ -n "$ip" ] && [ "$ssh_status" = "available" ]; then
-      echo "  SSH Command: ssh $username@$ip"
+      echo "  SSH Command: ssh $username@$hostname"
     fi
     echo
   fi
@@ -218,7 +217,12 @@ show_summary_table() {
 
         # Quick SSH connectivity test
         if timeout 1 nc -z "$ip" 22 2>/dev/null; then
-          ssh_cmd="ssh $username@$ip"
+          # Get hostname for SSH command
+          local vm_hostname="$vm_name"
+          if [ -f "$vm_dir/cloud-init/user-data" ]; then
+            vm_hostname=$(grep "^hostname:" "$vm_dir/cloud-init/user-data" | cut -d' ' -f2 || echo "$vm_name")
+          fi
+          ssh_cmd="ssh $username@$vm_hostname"
         else
           ssh_cmd="ssh not ready"
         fi

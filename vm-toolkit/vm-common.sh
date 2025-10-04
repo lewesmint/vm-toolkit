@@ -41,7 +41,9 @@ parse_common_args() {
     VM_NAME="$vm_name"
 
     # Return remaining args as space-separated string
-    printf '%s ' "${remaining_args[@]}"
+    if [ ${#remaining_args[@]} -gt 0 ]; then
+        printf '%s ' "${remaining_args[@]}"
+    fi
 }
 
 # Ensure VM exists and return secure directory
@@ -63,20 +65,21 @@ get_vm_pid() {
     local vm_name="$1"
     local vm_dir="$2"
     local pid_file="$vm_dir/${vm_name}.pid"
-    
+
     if [ ! -f "$pid_file" ]; then
         return 1  # No PID file
     fi
-    
+
     local pid
     pid=$(cat "$pid_file")
-    
-    if ! kill -0 "$pid" 2>/dev/null; then
+
+    # Check if process exists (handle both user and root-owned processes)
+    if ! ps -p "$pid" >/dev/null 2>&1; then
         # Stale PID file
         rm -f "$pid_file"
         return 1
     fi
-    
+
     echo "$pid"
 }
 
@@ -103,9 +106,61 @@ ensure_vm_running() {
 ensure_vm_stopped() {
     local vm_name="$1"
     local vm_dir="$2"
-    
+
     if is_vm_running "$vm_name" "$vm_dir"; then
         error "VM '$vm_name' is already running"
+        exit 1
+    fi
+}
+
+# Get VM status from registry
+get_vm_registry_status() {
+    local vm_name="$1"
+
+    if [ ! -f "$REGISTRY_FILE" ]; then
+        echo "unknown"
+        return
+    fi
+
+    jq -r ".vms[\"$vm_name\"].status // \"unknown\"" "$REGISTRY_FILE" 2>/dev/null || echo "unknown"
+}
+
+# Ensure VM is in running state (not paused)
+ensure_vm_state_running() {
+    local vm_name="$1"
+    local vm_dir="$2"
+
+    # First check if VM process exists
+    if ! is_vm_running "$vm_name" "$vm_dir"; then
+        error "VM '$vm_name' is not running"
+        exit 1
+    fi
+
+    # Then check if it's in running state (not paused)
+    local status
+    status=$(get_vm_registry_status "$vm_name")
+    if [ "$status" != "running" ]; then
+        error "VM '$vm_name' is not in running state (current: $status)"
+        exit 1
+    fi
+}
+
+# Ensure VM is in paused state
+ensure_vm_state_paused() {
+    local vm_name="$1"
+    local vm_dir="$2"
+
+    # First check if VM process exists
+    if ! is_vm_running "$vm_name" "$vm_dir"; then
+        error "VM '$vm_name' is not running"
+        exit 1
+    fi
+
+    # Then check if it's in paused state
+    local status
+    status=$(get_vm_registry_status "$vm_name")
+    if [ "$status" != "paused" ]; then
+        error "VM '$vm_name' is not paused (current: $status)"
         exit 1
     fi
 }
@@ -246,7 +301,7 @@ force_kill_vm() {
     log "Force killing VM: $vm_name (PID: $pid)"
     if kill -KILL "$pid" 2>/dev/null; then
         rm -f "$vm_dir/${vm_name}.pid"
-        update_vm_status "$vm_name" "stopped" "" ""
+        # No registry update needed - status computed live
         return 0
     else
         warn "Failed to kill process $pid"
@@ -265,7 +320,7 @@ wait_for_vm_stop() {
     for ((i = 1; i <= timeout; i++)); do
         if ! kill -0 "$pid" 2>/dev/null; then
             rm -f "$vm_dir/${vm_name}.pid"
-            update_vm_status "$vm_name" "stopped" "" ""
+            # No registry update needed - status computed live
             log "✅ VM '$vm_name' stopped gracefully"
             return 0
         fi

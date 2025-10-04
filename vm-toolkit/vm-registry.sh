@@ -97,38 +97,8 @@ EOF
   log "Registered VM '$vm_name' in registry"
 }
 
-# Update VM status in registry
-update_vm_status() {
-  local vm_name="$1"
-  local status="$2"
-  local pid="$3"
-  local ip_address="$4"
-
-  init_registry
-
-  local timestamp
-  timestamp=$(date -Iseconds)
-
-  if command -v jq >/dev/null 2>&1; then
-    local temp_file
-    temp_file=$(mktemp)
-    jq --arg status "$status" --arg pid "$pid" --arg ip "$ip_address" --arg timestamp "$timestamp" \
-      '.vms["'"$vm_name"'"].status = $status |
-            .vms["'"$vm_name"'"].pid = $pid |
-            .vms["'"$vm_name"'"].ip_address = $ip |
-            .vms["'"$vm_name"'"].updated = $timestamp' \
-      "$REGISTRY_FILE" >"$temp_file"
-    mv "$temp_file" "$REGISTRY_FILE"
-  else
-    # Fallback: mark as updated (less precise)
-    touch "$REGISTRY_FILE"
-  fi
-
-  # Fix ownership if running as root via sudo
-  fix_registry_ownership
-
-  log "Updated VM '$vm_name' status: $status"
-}
+# Registry only stores static configuration - no dynamic state
+# Dynamic state (status, pid, ip) is computed live from system state
 
 # Get VM architecture from registry
 get_vm_architecture() {
@@ -221,14 +191,29 @@ get_vm_status() {
       if [ -S "$qmp_socket" ] && command -v socat >/dev/null 2>&1; then
         local qmp_status
         qmp_status=$(timeout 1 bash -c 'echo "{\"execute\":\"qmp_capabilities\"}{\"execute\":\"query-status\"}" | socat - "UNIX-CONNECT:'"$qmp_socket"'"' 2>/dev/null |
-          grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo "running")
+          grep -o '"status": "[^"]*"' | cut -d'"' -f4 || echo "running")
 
         if [ "$qmp_status" = "paused" ]; then
           echo "paused"
           return
         fi
       fi
-      echo "running"
+
+      # Process is running, now check if it has an IP address
+      local vm_ip
+      vm_ip=$(get_vm_ip "$vm_name")
+
+      if [ -n "$vm_ip" ]; then
+        # Has IP address, check if SSH is ready
+        if timeout 2 nc -z "$vm_ip" 22 2>/dev/null; then
+          echo "running"  # Fully operational
+        else
+          echo "booting"  # Has IP but SSH not ready yet
+        fi
+      else
+        # No IP yet, still initializing
+        echo "initializing"
+      fi
       return
     else
       # Stale PID file
@@ -339,48 +324,54 @@ get_vm_ip() {
   local mac
   mac=$(cat "$vm_dir/${vm_name}.mac")
 
-  # Try faster methods first before falling back to arp -a
-  # Method 1: Check if IP is cached in registry
-  local cached_ip
-  cached_ip=$(jq -r ".vms[\"$vm_name\"].ip_address // \"\"" "$REGISTRY_FILE" 2>/dev/null)
-  if [ -n "$cached_ip" ] && [ "$cached_ip" != "null" ] && [ "$cached_ip" != "" ]; then
-    # Verify cached IP is still valid with a quick ping
-    if ping -c 1 -W 1000 "$cached_ip" >/dev/null 2>&1; then
-      echo "$cached_ip"
+  # Method 1: Check console log for IP address (most reliable for fresh boots)
+  if [ -f "$vm_dir/console.log" ]; then
+    local console_ip
+    # Look for cloud-init network info table with IP and MAC: "| ens3 | True | 192.168.1.79 | 255.255.255.0 | global | 52:54:00:be:9d:58 |"
+    console_ip=$(grep -E '([0-9]{1,3}\.){3}[0-9]{1,3}.*([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' "$vm_dir/console.log" 2>/dev/null | \
+      grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | \
+      grep -v '^127\.' | grep -v '255\.255' | head -1)
+    if [ -n "$console_ip" ]; then
+      echo "$console_ip"
       return
     fi
   fi
 
-  # Method 2: Use arp -a but with timeout to prevent hanging
-  timeout 2 arp -a 2>/dev/null | grep "$mac" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+  # Method 2: Try hostname resolution (works when DNS is registered)
+  local hostname_ip
+  hostname_ip=$(nslookup "$vm_name" 2>/dev/null | grep "Address:" | grep -v "#53" | head -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
+  if [ -n "$hostname_ip" ]; then
+    echo "$hostname_ip"
+    return
+  fi
+
+  # Method 4: Use arp -a but with timeout to prevent hanging (fallback)
+  # Handle MAC address format variations (macOS strips leading zeros in hex octets)
+  # Convert 52:54:00:8e:d3:f6 to pattern that matches 52:54:0:8e:d3:f6
+  local mac_no_leading_zeros
+  mac_no_leading_zeros=$(echo "$mac" | sed 's/:0\([0-9a-f]\)/:\1/g')
+
+  # Try both formats: with and without leading zeros
+  local arp_result
+  arp_result=$(timeout 2 arp -a 2>/dev/null | grep -E "($mac|$mac_no_leading_zeros)" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+  if [ -n "$arp_result" ]; then
+    echo "$arp_result"
+  fi
 }
 
-# Sync registry with actual VM state
+# Sync registry - only remove missing VMs (no dynamic state updates)
 sync_registry() {
   init_registry
 
-  log "Syncing registry with actual VM state..."
+  log "Syncing registry - removing missing VMs..."
 
-  # Update status for all registered VMs and remove phantom VMs
+  # Find and remove phantom VMs (VMs in registry but directory missing)
   local phantom_vms=()
   for vm_name in $(list_vms); do
-    local status
-    status=$(get_vm_status "$vm_name")
-    local ip=""
-    local pid=""
-
-    if [ "$status" = "missing" ]; then
+    if [ ! -d "${VM_BASE_DIR}/$vm_name" ]; then
       # VM directory doesn't exist - mark as phantom for removal
       phantom_vms+=("$vm_name")
       warn "Found phantom VM in registry: $vm_name (directory missing)"
-    elif [ "$status" = "running" ]; then
-      ip=$(get_vm_ip "$vm_name")
-      if [ -f "${VM_BASE_DIR}/$vm_name/${vm_name}.pid" ]; then
-        pid=$(cat "${VM_BASE_DIR}/$vm_name/${vm_name}.pid")
-      fi
-      update_vm_status "$vm_name" "$status" "$pid" "$ip"
-    else
-      update_vm_status "$vm_name" "$status" "$pid" "$ip"
     fi
   done
 
@@ -437,11 +428,11 @@ show_registry_stats() {
   local running_vms=0
   local stopped_vms=0
 
-  # Use cached status from registry after sync instead of calling get_vm_status again
+  # Compute live status for each VM
   for vm_name in $(list_vms); do
     local status
-    status=$(jq -r ".vms[\"$vm_name\"].status // \"unknown\"" "$REGISTRY_FILE" 2>/dev/null)
-    if [ "$status" = "running" ]; then
+    status=$(get_vm_status "$vm_name")
+    if [ "$status" = "running" ] || [ "$status" = "initializing" ] || [ "$status" = "booting" ]; then
       running_vms=$((running_vms + 1))
     else
       stopped_vms=$((stopped_vms + 1))
@@ -458,6 +449,6 @@ show_registry_stats() {
 # Export registry functions for use by other scripts
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
   # Being sourced, export functions
-  export -f init_registry register_vm update_vm_status unregister_vm
+  export -f init_registry register_vm unregister_vm
   export -f get_vm_info list_vms get_vm_status get_vm_pid get_vm_ip get_vm_architecture sync_registry
 fi

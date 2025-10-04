@@ -29,12 +29,12 @@ Usage: $0 [options]
 
 Options:
   --install-dir DIR     Install toolkit to DIR (default: current directory)
-  --data-dir DIR        Store VMs and data in DIR (default: ~/vm-toolkit-data)
+  --data-dir DIR        Store VMs and data in DIR (default: <install-dir>/vm-toolkit-data)
   --force              Overwrite existing installation
   --help               Show this help
 
 Examples:
-  # Install from current directory with default data location
+  # Install from current directory with default data location (./vm-toolkit-data)
   ./install.sh
 
   # Install to specific location with custom data directory
@@ -82,7 +82,7 @@ if [ -z "$INSTALL_DIR" ]; then
 fi
 
 if [ -z "$DATA_DIR" ]; then
-    DATA_DIR="$HOME/vm-toolkit-data"
+    DATA_DIR="$INSTALL_DIR/vm-toolkit-data"
 fi
 
 # Convert to absolute paths

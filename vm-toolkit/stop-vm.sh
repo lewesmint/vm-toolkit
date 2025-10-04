@@ -60,8 +60,7 @@ if [ "$FORCE_KILL" = true ]; then
   sudo kill -KILL "$PID"
   rm -f "$VM_DIR/${VM_NAME}.pid"
 
-  # Update registry
-  update_vm_status "$VM_NAME" "stopped" "" ""
+  # No registry update needed - status computed live
 
   log "✅ VM '$VM_NAME' force killed"
 else
@@ -83,8 +82,7 @@ else
     if ! kill -0 "$PID" 2>/dev/null; then
       rm -f "$VM_DIR/${VM_NAME}.pid"
 
-      # Update registry
-      update_vm_status "$VM_NAME" "stopped" "" ""
+      # No registry update needed - status computed live
 
       log "✅ VM '$VM_NAME' stopped gracefully"
       exit 0
@@ -97,8 +95,7 @@ else
   sudo kill -KILL "$PID"
   rm -f "$VM_DIR/${VM_NAME}.pid"
 
-  # Update registry
-  update_vm_status "$VM_NAME" "stopped" "" ""
+  # No registry update needed - status computed live
 
   log "✅ VM '$VM_NAME' force killed after timeout"
 fi
