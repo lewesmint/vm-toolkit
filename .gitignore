@@ -1,0 +1,45 @@
+# VM files and images
+*.qcow2
+*.iso
+*.img
+*.vmdk
+*.vdi
+
+# Cache directories
+.cache/
+cache/
+
+# VM registry and runtime files
+.vm-registry.json
+*.pid
+*.lock
+
+# Old/archived files
+OLD/
+
+# VM data directories (contains actual VM instances)
+vms/
+
+# Analysis and report files (generated documentation)
+vm-toolkit-analysis.md
+vm-toolkit-linting-*.md
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# SSH keys and sensitive data
+*.pem
+*.key
+id_rsa*
+known_hosts
+
+# Backup files
+*.backup
+*.bak
+*~

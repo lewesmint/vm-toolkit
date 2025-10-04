@@ -1,0 +1,158 @@
+#!/bin/bash
+
+# VM Toolkit Main Manager Script
+# Unified interface for all VM operations
+
+set -e
+
+# Get script directory (resolve symlinks)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ $SCRIPT_PATH != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+TOOLKIT_DIR="$SCRIPT_DIR/vm-toolkit"
+
+# Load configuration (this will set VM_BASE_DIR to ~/vmq/vms)
+source "$TOOLKIT_DIR/vm-config.sh"
+source "$TOOLKIT_DIR/vm-registry.sh"
+
+show_usage() {
+  cat <<EOF
+VM Toolkit - Unified VM Management
+
+Usage: $0 <command> [options]
+
+Commands:
+  create                Create a new VM
+  start                 Start an existing VM
+  stop                  Stop a running VM
+  pause                 Pause a running VM
+  resume                Resume a paused VM
+  status                Show detailed VM status with live checking
+  list                  Quick list of all VMs (fast, registry-only)
+  destroy               Completely destroy a VM and all its data
+  sync                  Sync registry with actual VM state
+  cleanup               Remove missing VMs from registry
+  help                  Show this help
+
+Global Options:
+  --help                Show command-specific help
+
+Examples:
+  $0 create --name myvm --username developer --disk 100G
+  $0 create --name debian-vm --os debian --version 12
+  $0 start --name myvm --console
+  $0 pause --name myvm
+  $0 resume --name myvm
+  $0 status --name myvm
+  $0 list
+  $0 stop --name myvm
+  $0 destroy --name myvm
+
+Configuration:
+  Edit ~/.vm-toolkit-config or vm-toolkit/vm-config.sh
+  Use VM_* environment variables for temporary overrides
+
+For detailed help on any command:
+  $0 <command> --help
+EOF
+}
+
+# Check if toolkit directory exists
+if [ ! -d "$TOOLKIT_DIR" ]; then
+  error "VM toolkit directory not found: $TOOLKIT_DIR"
+  error "Make sure you're running this script from the correct location"
+  exit 1
+fi
+
+# Parse command
+COMMAND="${1:-}"
+shift || true
+
+case "$COMMAND" in
+"create")
+  exec "$TOOLKIT_DIR/create-vm.sh" "$@"
+  ;;
+"start")
+  # Start requires root for vmnet access
+  if [ "$EUID" -ne 0 ]; then
+    error "VM start requires root privileges for vmnet access"
+    error "Please run: sudo $0 start $*"
+    exit 1
+  else
+    exec "$TOOLKIT_DIR/start-vm.sh" "$@"
+  fi
+  ;;
+"stop")
+  exec "$TOOLKIT_DIR/stop-vm.sh" "$@"
+  ;;
+"pause")
+  exec "$TOOLKIT_DIR/pause-vm.sh" "$@"
+  ;;
+"resume")
+  exec "$TOOLKIT_DIR/resume-vm.sh" "$@"
+  ;;
+"status")
+  exec "$TOOLKIT_DIR/status-vm.sh" "$@"
+  ;;
+"list")
+  exec "$TOOLKIT_DIR/list-vms.sh" "$@"
+  ;;
+"destroy")
+  exec "$TOOLKIT_DIR/destroy-vm.sh" "$@"
+  ;;
+"sync")
+  sync_registry
+  log "Registry synchronized"
+  ;;
+"cleanup")
+  # Remove missing VMs from registry
+  if [ ! -f "$REGISTRY_FILE" ]; then
+    log "No registry file found - nothing to clean up"
+    exit 0
+  fi
+
+  # Get list of missing VMs
+  missing_vms=()
+  while IFS= read -r vm_name; do
+    if [ -n "$vm_name" ]; then
+      missing_vms+=("$vm_name")
+    fi
+  done < <(jq -r '.vms | to_entries[] | select(.value.status == "missing") | .key' "$REGISTRY_FILE" 2>/dev/null || true)
+
+  if [ ${#missing_vms[@]} -eq 0 ]; then
+    log "✅ No missing VMs found in registry"
+    exit 0
+  fi
+
+  log "🧹 Found ${#missing_vms[@]} missing VM(s) to remove from registry:"
+  for vm_name in "${missing_vms[@]}"; do
+    log "  - $vm_name"
+  done
+  echo
+
+  read -p "Remove these VMs from registry? [y/N]: " confirm
+  if [[ "$confirm" =~ ^[Yy] ]]; then
+    for vm_name in "${missing_vms[@]}"; do
+      unregister_vm "$vm_name"
+      log "Removed '$vm_name' from registry"
+    done
+    log "✅ Registry cleanup complete"
+  else
+    log "Registry cleanup cancelled"
+  fi
+  ;;
+"help" | "--help" | "")
+  show_usage
+  exit 0
+  ;;
+*)
+  error "Unknown command: $COMMAND"
+  echo ""
+  show_usage
+  exit 1
+  ;;
+esac

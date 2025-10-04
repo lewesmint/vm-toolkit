@@ -1,0 +1,58 @@
+MIT License
+
+Copyright (c) 2025 VM Toolkit Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+ADDITIONAL DISCLAIMERS AND WARNINGS:
+
+USE AT YOUR OWN RISK. This software:
+
+1. CREATES AND MANAGES VIRTUAL MACHINES which can consume significant system 
+   resources, disk space, and network bandwidth.
+
+2. REQUIRES ELEVATED PRIVILEGES (sudo) for network bridge functionality, which 
+   could potentially impact system security if misused.
+
+3. DOWNLOADS AND EXECUTES CLOUD IMAGES from third-party sources. Users are 
+   responsible for verifying the integrity and security of downloaded images.
+
+4. MODIFIES SYSTEM NETWORK CONFIGURATION through macOS vmnet framework, which 
+   could affect network connectivity.
+
+5. CREATES, MODIFIES, AND DELETES FILES AND DIRECTORIES on your system. Data 
+   loss is possible if used incorrectly.
+
+6. IS PROVIDED WITHOUT ANY TECHNICAL SUPPORT, WARRANTY, OR GUARANTEE OF 
+   FUNCTIONALITY.
+
+7. MAY CONTAIN BUGS, SECURITY VULNERABILITIES, OR OTHER DEFECTS that could 
+   cause system instability, data loss, or security breaches.
+
+8. IS NOT INTENDED FOR PRODUCTION USE without thorough testing and validation 
+   in your specific environment.
+
+USERS ASSUME ALL RISKS associated with the installation, configuration, and 
+use of this software. The authors and contributors disclaim all liability for 
+any direct, indirect, incidental, special, exemplary, or consequential damages 
+resulting from the use or inability to use this software.
+
+By using this software, you acknowledge that you have read, understood, and 
+agree to these terms and assume full responsibility for any consequences of 
+its use.

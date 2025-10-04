@@ -1,0 +1,67 @@
+# VM Toolkit User Configuration Example
+# Copy this file to ~/.vm-toolkit-config and customize as needed
+#
+# This file is sourced by vm-config.sh and allows you to override
+# default settings without modifying the main configuration.
+#
+# All settings can also be overridden with environment variables
+# using the VM_ prefix (e.g., VM_USERNAME="alice")
+
+# Installation and data paths
+# VM_TOOLKIT_DIR="/path/to/vm-toolkit"           # Toolkit installation directory
+# VM_PROJECT_DIR="$HOME/vm-toolkit-data"        # Data directory (VMs, cache, registry)
+# VM_BASE_DIR="$VM_PROJECT_DIR/vms"             # VM storage directory
+# CLOUD_IMAGE_CACHE="$VM_PROJECT_DIR/.cache"    # Cloud image cache
+# REGISTRY_FILE="$VM_PROJECT_DIR/.vm-registry.json"  # VM registry file
+
+# User and authentication settings
+VM_USERNAME="developer"                    # Default VM username
+VM_SSH_KEY="$HOME/.ssh/id_ed25519.pub"    # SSH public key path
+VM_SHELL="/bin/bash"                      # Default shell for VM user
+VM_SUDO_GROUPS="sudo,kvm,libvirt,docker"  # Groups for VM user
+
+# VM resource defaults
+VM_DISK_SIZE="50G"                        # Default disk size
+VM_MEM_MB="4096"                          # Default memory in MB
+VM_VCPUS="4"                              # Default vCPU count
+
+# Network settings
+VM_BRIDGE_IF="en0"                        # Bridge interface (usually en0 for Wi-Fi)
+
+# QEMU settings
+VM_MACHINE="accel=tcg"                     # QEMU machine type
+VM_CPU="max"                              # QEMU CPU type
+
+# Ubuntu settings
+VM_UBUNTU_VERSION="noble"                 # Ubuntu version (noble=24.04 LTS)
+VM_PACKAGES="openssh-server,qemu-guest-agent,curl,wget,vim,htop,git"
+
+# Operational settings
+VM_TIMEOUT_SEC="30"                       # Shutdown timeout in seconds
+
+# Development environment example
+# Uncomment and customize for development VMs:
+#
+# VM_USERNAME="dev"
+# VM_DISK_SIZE="100G"
+# VM_MEM_MB="8192"
+# VM_VCPUS="8"
+# VM_PACKAGES="openssh-server,qemu-guest-agent,build-essential,git,docker.io,nodejs,npm"
+
+# Server environment example
+# Uncomment and customize for server VMs:
+#
+# VM_USERNAME="admin"
+# VM_DISK_SIZE="200G"
+# VM_MEM_MB="16384"
+# VM_VCPUS="8"
+# VM_PACKAGES="openssh-server,qemu-guest-agent,nginx,postgresql,redis-server"
+
+# Lightweight testing example
+# Uncomment and customize for test VMs:
+#
+# VM_USERNAME="test"
+# VM_DISK_SIZE="20G"
+# VM_MEM_MB="2048"
+# VM_VCPUS="2"
+# VM_PACKAGES="openssh-server,qemu-guest-agent"
