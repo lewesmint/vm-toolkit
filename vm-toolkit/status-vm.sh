@@ -12,12 +12,13 @@ source "$SCRIPT_DIR/vm-registry.sh"
 
 show_usage() {
   cat <<EOF
-Usage: $0 [--name <vm-name>] [options]
+Usage: $0 [vm-name] [options]
 
 Show status of VMs.
 
 Options:
-  --name <name>         Show status for specific VM
+  vm-name               Show status for specific VM (positional argument)
+  --name <name>         Show status for specific VM (alternative syntax)
   --all                 Show all VMs (default if no name specified)
   --json                Output in JSON format
   --sync                Sync registry before showing status
@@ -25,7 +26,8 @@ Options:
 
 Examples:
   $0                    # Show all VMs
-  $0 --name myvm        # Show specific VM
+  $0 myvm               # Show specific VM (positional)
+  $0 --name myvm        # Show specific VM (named argument)
   $0 --all --json       # Show all VMs in JSON format
   $0 --sync             # Sync registry and show all VMs
 EOF
@@ -60,10 +62,22 @@ while [[ $# -gt 0 ]]; do
     show_usage
     exit 0
     ;;
-  *)
+  -*)
     error "Unknown option: $1"
     show_usage
     exit 1
+    ;;
+  *)
+    # Positional argument - treat as VM name
+    if [ -z "$VM_NAME" ]; then
+      VM_NAME="$1"
+      SHOW_ALL=false
+    else
+      error "Multiple VM names specified: '$VM_NAME' and '$1'"
+      show_usage
+      exit 1
+    fi
+    shift
     ;;
   esac
 done

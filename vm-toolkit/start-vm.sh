@@ -135,6 +135,11 @@ else
   sleep 2
 
   if [ -f "${VM_NAME}.pid" ]; then
+    # Fix ownership if running as root via sudo
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+      chown "$SUDO_USER:$(id -gn "$SUDO_USER")" "${VM_NAME}.pid" "${VM_NAME}.qmp" console.log 2>/dev/null || true
+    fi
+
     PID=$(cat "${VM_NAME}.pid")
 
     # Update registry with running status

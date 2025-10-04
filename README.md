@@ -125,8 +125,9 @@ vm start --name test --console
 # In another terminal, check status
 vm status --name test
 
-# SSH to the VM when ready
-ssh ubuntu@<vm-ip>
+# SSH to the VM when ready (check status for IP and username)
+vm status --name test
+ssh <username>@<vm-ip>
 ```
 
 ## 📋 Commands
