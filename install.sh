@@ -191,16 +191,47 @@ log "Setting up data directories..."
 mkdir -p "$DATA_DIR/vms"
 mkdir -p "$DATA_DIR/.cache"
 
-# Check if $HOME/bin is in PATH
+# Check if $HOME/bin is in PATH and add it if needed
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     warn "$BIN_DIR is not in your PATH"
-    echo ""
-    echo "Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-    echo "  export PATH=\"\$HOME/bin:\$PATH\""
-    echo ""
-    echo "Then reload your shell or run:"
-    echo "  source ~/.bashrc  # or ~/.zshrc"
-    echo ""
+
+    # Detect shell and add to appropriate profile
+    SHELL_NAME=$(basename "$SHELL")
+    case "$SHELL_NAME" in
+        bash)
+            PROFILE_FILE="$HOME/.bashrc"
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS uses .bash_profile by default
+                PROFILE_FILE="$HOME/.bash_profile"
+            fi
+            ;;
+        zsh)
+            PROFILE_FILE="$HOME/.zshrc"
+            ;;
+        fish)
+            PROFILE_FILE="$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            PROFILE_FILE="$HOME/.profile"
+            ;;
+    esac
+
+    # Add PATH export to profile if not already there
+    PATH_EXPORT="export PATH=\"\$HOME/bin:\$PATH\""
+    if [ -f "$PROFILE_FILE" ] && grep -q "HOME/bin" "$PROFILE_FILE"; then
+        log "PATH already configured in $PROFILE_FILE"
+    else
+        echo ""
+        echo "Adding $BIN_DIR to PATH in $PROFILE_FILE..."
+        echo "" >> "$PROFILE_FILE"
+        echo "# Added by vm-toolkit installer" >> "$PROFILE_FILE"
+        echo "$PATH_EXPORT" >> "$PROFILE_FILE"
+        log "✅ Added $BIN_DIR to PATH in $PROFILE_FILE"
+        echo ""
+        echo "Reload your shell or run:"
+        echo "  source $PROFILE_FILE"
+        echo "Or open a new terminal window."
+    fi
 else
     log "$BIN_DIR is already in your PATH"
 fi
@@ -209,6 +240,9 @@ fi
 if command -v vm >/dev/null 2>&1; then
     log "✅ Installation successful!"
     echo ""
+    echo "The 'vm' command is now available globally via symlink:"
+    echo "  $SYMLINK_PATH -> $VM_SCRIPT"
+    echo ""
     echo "You can now use 'vm' from anywhere:"
     echo "  vm help"
     echo "  vm create --name test"
@@ -216,8 +250,11 @@ if command -v vm >/dev/null 2>&1; then
 else
     warn "Installation complete, but 'vm' command not found in PATH"
     echo ""
+    echo "Symlink created: $SYMLINK_PATH -> $VM_SCRIPT"
     echo "You can still use the full path:"
     echo "  $VM_SCRIPT help"
+    echo ""
+    echo "Or reload your shell to pick up the PATH changes."
 fi
 
 echo ""

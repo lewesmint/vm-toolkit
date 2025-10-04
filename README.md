@@ -73,6 +73,9 @@ curl -L https://github.com/YOUR_USERNAME/vm-toolkit/archive/refs/heads/main.tar.
 cd vm-toolkit-main
 ./install.sh
 
+# The installer creates a symlink: ~/bin/vm -> /path/to/vm-toolkit/vm
+# and ensures ~/bin is in your PATH
+
 # Now you can use 'vm' from anywhere
 vm help
 ```
@@ -293,7 +296,7 @@ vm-toolkit/                         # Toolkit installation directory
 ### Configuration
 ```
 ~/.vm-toolkit-config               # User configuration file
-~/bin/vm                          # Command symlink (in PATH)
+~/bin/vm -> /path/to/vm-toolkit/vm # Command symlink (in PATH)
 ```
 
 ## 💡 Examples
