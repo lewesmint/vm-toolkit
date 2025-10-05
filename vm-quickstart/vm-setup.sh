@@ -77,12 +77,40 @@ read -p "Press Enter to continue..."
 
 gh auth login
 
-# Verify authentication
+# Verify authentication and configure Git
 echo ""
 log_info "Verifying GitHub authentication..."
 if gh auth status > /dev/null 2>&1; then
     log_success "GitHub authentication successful!"
-    echo "   Logged in as: $(gh api user --jq .login)"
+
+    # Get user info from GitHub API
+    log_info "Retrieving user information from GitHub..."
+    github_username=$(gh api user --jq .login)
+    github_email=$(gh api user --jq .email)
+
+    # If email is null/private, try to get a public email
+    if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
+        log_info "Primary email is private, checking for public emails..."
+        github_email=$(gh api user/emails --jq '.[] | select(.primary == true) | .email' 2>/dev/null)
+
+        # If still no email, ask user
+        if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
+            echo "⚠️  No public email found in your GitHub profile"
+            read -p "Please enter your Git email: " github_email
+        fi
+    fi
+
+    echo "   Logged in as: $github_username"
+    echo "   Email: $github_email"
+
+    # Configure Git with GitHub info
+    log_info "Configuring Git with GitHub information..."
+    git config --global user.name "$github_username"
+    git config --global user.email "$github_email"
+    git config --global init.defaultBranch main
+    git config --global pull.rebase false
+
+    log_success "Git configured with GitHub credentials"
 else
     echo "❌ GitHub authentication failed"
     exit 1
