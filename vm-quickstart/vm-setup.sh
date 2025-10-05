@@ -83,34 +83,46 @@ log_info "Verifying GitHub authentication..."
 if gh auth status > /dev/null 2>&1; then
     log_success "GitHub authentication successful!"
 
-    # Get user info from GitHub API
+    # Get username from GitHub API
     log_info "Retrieving user information from GitHub..."
-    github_username=$(gh api user --jq .login)
-    github_email=$(gh api user --jq .email)
+    github_username=$(gh api user --jq .login 2>/dev/null)
 
-    # If email is null/private, try to get a public email
-    if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
-        log_info "Primary email is private, checking for public emails..."
-        github_email=$(gh api user/emails --jq '.[] | select(.primary == true) | .email' 2>/dev/null)
+    if [ -n "$github_username" ] && [ "$github_username" != "null" ]; then
+        echo "   Logged in as: $github_username"
 
-        # If still no email, ask user
+        # Try to get email from GitHub API
+        github_email=$(gh api user --jq .email 2>/dev/null)
+
+        # If email is null/private, ask user
         if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
-            echo "⚠️  No public email found in your GitHub profile"
-            read -p "Please enter your Git email: " github_email
+            echo "   Email is private in your GitHub profile"
+            read -p "   Please enter your Git email: " github_email
+        else
+            echo "   Email: $github_email"
         fi
+
+        # Configure Git with GitHub info
+        log_info "Configuring Git..."
+        git config --global user.name "$github_username"
+        git config --global user.email "$github_email"
+        git config --global init.defaultBranch main
+        git config --global pull.rebase false
+
+        log_success "Git configured with GitHub credentials"
+    else
+        # Fallback: ask for credentials manually
+        echo "   Could not retrieve GitHub username automatically"
+        log_info "Please enter your Git configuration:"
+        read -p "   Git username: " github_username
+        read -p "   Git email: " github_email
+
+        git config --global user.name "$github_username"
+        git config --global user.email "$github_email"
+        git config --global init.defaultBranch main
+        git config --global pull.rebase false
+
+        log_success "Git configured manually"
     fi
-
-    echo "   Logged in as: $github_username"
-    echo "   Email: $github_email"
-
-    # Configure Git with GitHub info
-    log_info "Configuring Git with GitHub information..."
-    git config --global user.name "$github_username"
-    git config --global user.email "$github_email"
-    git config --global init.defaultBranch main
-    git config --global pull.rebase false
-
-    log_success "Git configured with GitHub credentials"
 else
     echo "❌ GitHub authentication failed"
     exit 1
