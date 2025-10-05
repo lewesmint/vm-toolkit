@@ -46,6 +46,8 @@ register_vm() {
   local mac_address="$7"
   local instance_id="$8"
   local architecture="${9:-x86_64}"
+  local memory_mb="${10:-$(get_mem_mb)}"
+  local vcpus="${11:-$(get_vcpus)}"
 
   init_registry
 
@@ -60,13 +62,14 @@ register_vm() {
   "hostname": "$hostname",
   "username": "$username",
   "disk_size": "$disk_size",
+  "memory_mb": $memory_mb,
+  "vcpus": $vcpus,
   "os_version": "$os_version",
   "architecture": "$architecture",
   "mac_address": "$mac_address",
   "instance_id": "$instance_id",
   "created": "$timestamp",
-  "updated": "$timestamp",
-  "status": "stopped"
+  "updated": "$timestamp"
 }
 EOF
   )
@@ -118,6 +121,50 @@ get_vm_architecture() {
     local arch
     arch=$(grep -A 20 "\"$vm_name\"" "$REGISTRY_FILE" | grep '"architecture"' | sed 's/.*"architecture": *"\([^"]*\)".*/\1/' | head -1)
     echo "${arch:-x86_64}"
+  fi
+}
+
+# Get VM memory from registry
+get_vm_memory_mb() {
+  local vm_name="$1"
+
+  if [ ! -f "$REGISTRY_FILE" ]; then
+    get_mem_mb  # Default fallback
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    local memory_mb
+    memory_mb=$(jq -r ".vms[\"$vm_name\"].memory_mb // empty" "$REGISTRY_FILE" 2>/dev/null)
+    if [ -n "$memory_mb" ] && [ "$memory_mb" != "null" ]; then
+      echo "$memory_mb"
+    else
+      get_mem_mb  # Fallback to default
+    fi
+  else
+    get_mem_mb  # Fallback to default
+  fi
+}
+
+# Get VM vCPUs from registry
+get_vm_vcpus() {
+  local vm_name="$1"
+
+  if [ ! -f "$REGISTRY_FILE" ]; then
+    get_vcpus  # Default fallback
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    local vcpus
+    vcpus=$(jq -r ".vms[\"$vm_name\"].vcpus // empty" "$REGISTRY_FILE" 2>/dev/null)
+    if [ -n "$vcpus" ] && [ "$vcpus" != "null" ]; then
+      echo "$vcpus"
+    else
+      get_vcpus  # Fallback to default
+    fi
+  else
+    get_vcpus  # Fallback to default
   fi
 }
 
@@ -185,7 +232,8 @@ get_vm_status() {
   if [ -f "$vm_dir/${vm_name}.pid" ]; then
     local pid
     pid=$(cat "$vm_dir/${vm_name}.pid")
-    if kill -0 "$pid" 2>/dev/null; then
+    # Check if process exists (handle both user and root processes)
+    if ps -p "$pid" >/dev/null 2>&1; then
       # Quick check if VM is paused via QMP (fast operation)
       local qmp_socket="$vm_dir/${vm_name}.qmp"
       if [ -S "$qmp_socket" ] && command -v socat >/dev/null 2>&1; then
@@ -216,7 +264,7 @@ get_vm_status() {
       fi
       return
     else
-      # Stale PID file
+      # Stale PID file - clean it up
       rm -f "$vm_dir/${vm_name}.pid"
     fi
   fi
@@ -286,9 +334,13 @@ get_vm_pid() {
   if [ -f "$vm_dir/${vm_name}.pid" ]; then
     local pid
     pid=$(cat "$vm_dir/${vm_name}.pid")
-    if kill -0 "$pid" 2>/dev/null; then
+    # Check if process exists (handle both user and root processes)
+    if ps -p "$pid" >/dev/null 2>&1; then
       echo "$pid"
       return
+    else
+      # Clean up stale PID file
+      rm -f "$vm_dir/${vm_name}.pid"
     fi
   fi
 
@@ -312,10 +364,18 @@ get_vm_pid() {
   fi
 }
 
-# Get VM IP address
+# Get VM IP address (only if VM is actually running)
 get_vm_ip() {
   local vm_name="$1"
   local vm_dir="${VM_BASE_DIR}/$vm_name"
+
+  # First check if VM is actually running - don't return stale IPs
+  local vm_pid
+  vm_pid=$(get_vm_pid "$vm_name")
+  if [ -z "$vm_pid" ]; then
+    # VM not running, don't return stale IP addresses
+    return
+  fi
 
   if [ ! -f "$vm_dir/${vm_name}.mac" ]; then
     return
@@ -410,7 +470,12 @@ sync_registry() {
           instance_id=$(cat "$vm_dir/cloud-init/instance-id")
         fi
 
-        register_vm "$vm_name" "$vm_dir" "$hostname" "$username" "$disk_size" "$ubuntu_version" "$mac_address" "$instance_id"
+        # Use default memory and CPU for unregistered VMs
+        local default_memory_mb
+        default_memory_mb=$(get_mem_mb)
+        local default_vcpus
+        default_vcpus=$(get_vcpus)
+        register_vm "$vm_name" "$vm_dir" "$hostname" "$username" "$disk_size" "$ubuntu_version" "$mac_address" "$instance_id" "x86_64" "$default_memory_mb" "$default_vcpus"
       fi
     fi
   done
@@ -450,5 +515,5 @@ show_registry_stats() {
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
   # Being sourced, export functions
   export -f init_registry register_vm unregister_vm
-  export -f get_vm_info list_vms get_vm_status get_vm_pid get_vm_ip get_vm_architecture sync_registry
+  export -f get_vm_info list_vms get_vm_status get_vm_pid get_vm_ip get_vm_architecture get_vm_memory_mb get_vm_vcpus sync_registry
 fi

@@ -105,9 +105,14 @@ test_all_vms() {
     local tested=0
     local passed=0
     
-    # Get list of running VMs
-    local running_vms
-    running_vms=$(jq -r '.vms | to_entries[] | select(.value.status == "running") | .key' "$REGISTRY_FILE" 2>/dev/null || echo "")
+    # Get list of running VMs (check live status)
+    local running_vms=""
+    for vm_name in $(list_vms); do
+        if [ "$(get_vm_status "$vm_name")" = "running" ]; then
+            running_vms="$running_vms $vm_name"
+        fi
+    done
+    running_vms=$(echo "$running_vms" | xargs)  # trim whitespace
     
     if [ -z "$running_vms" ]; then
         echo "  ℹ️  No running VMs found"

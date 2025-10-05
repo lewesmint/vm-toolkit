@@ -22,8 +22,9 @@ VM_SUDO_GROUPS="sudo,kvm,libvirt,docker"  # Groups for VM user
 
 # VM resource defaults
 VM_DISK_SIZE="50G"                        # Default disk size
-VM_MEM_MB="4096"                          # Default memory in MB
-VM_VCPUS="4"                              # Default vCPU count
+VM_MEM_MB="8192"                          # Default memory in MB (increased for better performance)
+# VM_VCPUS="6"                            # vCPU count (auto-detected: host cores - 2, min 2, max 16)
+                                          # Uncomment to override auto-detection
 
 # Network settings
 VM_BRIDGE_IF="en0"                        # Bridge interface (usually en0 for Wi-Fi)

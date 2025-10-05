@@ -156,6 +156,8 @@ get_detailed_status() {
   "pid": "$pid",
   "uptime": "$uptime",
   "ssh_status": "$ssh_status",
+  "memory_mb": $(get_vm_memory_mb "$vm_name"),
+  "vcpus": $(get_vm_vcpus "$vm_name"),
   "disk_size": "$disk_size",
   "ubuntu_version": "$ubuntu_version",
   "directory": "$vm_dir"
@@ -174,6 +176,8 @@ EOF
       echo "  PID: $pid"
       echo "  Uptime: $uptime"
     fi
+    echo "  Memory: $(get_vm_memory_mb "$vm_name")MB"
+    echo "  vCPUs: $(get_vm_vcpus "$vm_name")"
     echo "  Disk Size: $disk_size"
     echo "  Ubuntu: $ubuntu_version"
     echo "  Directory: $vm_dir"

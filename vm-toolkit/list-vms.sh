@@ -36,9 +36,15 @@ list_vms_fast() {
   printf "%-15s %-10s %-15s\n" "VM NAME" "STATUS" "DIRECTORY"
   printf "%-15s %-10s %-15s\n" "-------" "------" "---------"
   
-  jq -r '.vms | to_entries[] | "\(.key) \(.value.status) \(.value.directory)"' "$REGISTRY_FILE" 2>/dev/null | \
-  while read -r name status directory; do
-    printf "%-15s %-10s %-15s\n" "$name" "$status" "$(basename "$directory")"
+  # Get live status for each VM (like status-vm.sh does)
+  for vm_name in $(list_vms | sort); do
+    local live_status
+    live_status=$(get_vm_status "$vm_name")
+    local vm_info
+    vm_info=$(get_vm_info "$vm_name")
+    local directory
+    directory=$(echo "$vm_info" | jq -r '.directory // "unknown"' 2>/dev/null || echo "unknown")
+    printf "%-15s %-10s %-15s\n" "$vm_name" "$live_status" "$(basename "$directory")"
   done
   
   echo ""

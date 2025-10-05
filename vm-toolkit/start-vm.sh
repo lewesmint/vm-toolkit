@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/vm-common.sh"
 show_usage() {
   show_vm_usage "$0" "Start an existing VM with bridge networking." "  --bridge <interface>  Bridge interface (default: $(get_bridge_if))
   --mem <mb>            Memory in MB (default: $(get_mem_mb))
-  --vcpus <count>       vCPU count (default: $(get_vcpus))
+  --vcpus <count>       vCPU count (default: auto-detected, $(get_vcpus) cores)
   --console             Show console output (default: background)"
 }
 
@@ -156,9 +156,9 @@ QEMU_CMD=(
   "$QEMU_BINARY"
   -machine "${MACHINE_TYPE},${ACCELERATION}"
   -cpu "$CPU_TYPE"
-  -smp "$VM_VCPUS"
+  -smp "cores=$VM_VCPUS,threads=1,sockets=1"
   -m "$VM_MEM_MB"
-  -drive "if=virtio,file=${VM_NAME}.qcow2,discard=unmap,detect-zeroes=on"
+  -drive "if=virtio,file=${VM_NAME}.qcow2,discard=unmap,detect-zeroes=on,cache=writeback"
   -drive "if=virtio,format=raw,media=cdrom,file=${VM_NAME}-seed.iso"
   -netdev "vmnet-bridged,id=net0,ifname=$VM_BRIDGE_IF"
   -device "virtio-net-pci,netdev=net0,mac=$VM_MAC"

@@ -113,17 +113,7 @@ ensure_vm_stopped() {
     fi
 }
 
-# Get VM status from registry
-get_vm_registry_status() {
-    local vm_name="$1"
-
-    if [ ! -f "$REGISTRY_FILE" ]; then
-        echo "unknown"
-        return
-    fi
-
-    jq -r ".vms[\"$vm_name\"].status // \"unknown\"" "$REGISTRY_FILE" 2>/dev/null || echo "unknown"
-}
+# Note: Registry no longer stores status - use get_vm_status() for live status
 
 # Ensure VM is in running state (not paused)
 ensure_vm_state_running() {
@@ -138,7 +128,7 @@ ensure_vm_state_running() {
 
     # Then check if it's in running state (not paused)
     local status
-    status=$(get_vm_registry_status "$vm_name")
+    status=$(get_vm_status "$vm_name")
     if [ "$status" != "running" ]; then
         error "VM '$vm_name' is not in running state (current: $status)"
         exit 1
@@ -158,7 +148,7 @@ ensure_vm_state_paused() {
 
     # Then check if it's in paused state
     local status
-    status=$(get_vm_registry_status "$vm_name")
+    status=$(get_vm_status "$vm_name")
     if [ "$status" != "paused" ]; then
         error "VM '$vm_name' is not paused (current: $status)"
         exit 1

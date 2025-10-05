@@ -610,7 +610,10 @@ echo "$VM_MAC" >"${VM_NAME}.mac"
 
 # Register VM in registry
 debug "Registering VM in registry"
-register_vm "$VM_NAME" "$(pwd)" "$VM_HOSTNAME" "$VM_USERNAME" "$VM_DISK_SIZE" "$VM_OS-$VM_VERSION" "$VM_MAC" "$INSTANCE_ID" "$VM_ARCH"
+# Get current memory and CPU defaults for registry
+VM_MEMORY_MB=$(get_mem_mb)
+VM_VCPUS_COUNT=$(get_vcpus)
+register_vm "$VM_NAME" "$(pwd)" "$VM_HOSTNAME" "$VM_USERNAME" "$VM_DISK_SIZE" "$VM_OS-$VM_VERSION" "$VM_MAC" "$INSTANCE_ID" "$VM_ARCH" "$VM_MEMORY_MB" "$VM_VCPUS_COUNT"
 
 log "✅ VM '$VM_NAME' created successfully!"
 log ""

@@ -11,9 +11,30 @@ DEFAULT_SHELL="/bin/bash"
 DEFAULT_SUDO_GROUPS="sudo,kvm,libvirt"
 
 # VM resource defaults
-DEFAULT_DISK_SIZE="40G"
-DEFAULT_MEM_MB="4096"
-DEFAULT_VCPUS="4"
+DEFAULT_DISK_SIZE="60G"    # Increased from 40G for more storage
+DEFAULT_MEM_MB="16384"     # 16GB RAM for modern workloads
+# Dynamic CPU allocation: use all available cores minus 2 (minimum 2, maximum 16)
+get_default_vcpus() {
+  local host_cores
+  if command -v nproc >/dev/null 2>&1; then
+    host_cores=$(nproc)
+  elif command -v sysctl >/dev/null 2>&1; then
+    host_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo "4")
+  else
+    host_cores=4  # Fallback
+  fi
+
+  local vm_cores=$((host_cores - 2))
+  # Ensure minimum of 2 cores and maximum of 16 cores
+  if [ "$vm_cores" -lt 2 ]; then
+    vm_cores=2
+  elif [ "$vm_cores" -gt 16 ]; then
+    vm_cores=16
+  fi
+
+  echo "$vm_cores"
+}
+DEFAULT_VCPUS="$(get_default_vcpus)"
 
 # Network defaults
 DEFAULT_BRIDGE_IF="en0" # macOS Wi-Fi interface
@@ -24,6 +45,11 @@ DEFAULT_ARCH="x86_64"
 # QEMU defaults (architecture-specific)
 DEFAULT_MACHINE="accel=tcg"
 DEFAULT_CPU="max"
+
+# GPU/Display defaults
+DEFAULT_VGA="none"           # none, std, virtio, vmware, cirrus
+DEFAULT_DISPLAY="none"       # none, gtk, cocoa, vnc
+DEFAULT_GPU_ACCEL="off"      # off, on (for virtio-vga-gl)
 
 # OS and cloud image defaults
 DEFAULT_OS="ubuntu"
@@ -120,10 +146,24 @@ get_shell() {
 get_sudo_groups() { get_config "SUDO_GROUPS" "$DEFAULT_SUDO_GROUPS"; }
 get_disk_size() { get_config "DISK_SIZE" "$DEFAULT_DISK_SIZE"; }
 get_mem_mb() { get_config "MEM_MB" "$DEFAULT_MEM_MB"; }
-get_vcpus() { get_config "VCPUS" "$DEFAULT_VCPUS"; }
+get_vcpus() {
+  local configured_vcpus
+  configured_vcpus=$(get_config "VCPUS" "")
+
+  # If user has explicitly configured VCPUS, use that
+  if [ -n "$configured_vcpus" ]; then
+    echo "$configured_vcpus"
+  else
+    # Otherwise use dynamic allocation
+    get_default_vcpus
+  fi
+}
 get_bridge_if() { get_config "BRIDGE_IF" "$DEFAULT_BRIDGE_IF"; }
 get_machine() { get_config "MACHINE" "$DEFAULT_MACHINE"; }
 get_cpu() { get_config "CPU" "$DEFAULT_CPU"; }
+get_vga() { get_config "VGA" "$DEFAULT_VGA"; }
+get_display() { get_config "DISPLAY" "$DEFAULT_DISPLAY"; }
+get_gpu_accel() { get_config "GPU_ACCEL" "$DEFAULT_GPU_ACCEL"; }
 get_os() { get_config "OS" "$DEFAULT_OS"; }
 get_ubuntu_version() { get_config "UBUNTU_VERSION" "$DEFAULT_UBUNTU_VERSION"; }
 get_debian_version() { get_config "DEBIAN_VERSION" "$DEFAULT_DEBIAN_VERSION"; }
@@ -235,6 +275,57 @@ get_cpu_type() {
       echo "max"
       ;;
   esac
+}
+
+# Get GPU/display arguments for QEMU
+get_gpu_args() {
+  local vga_type="${1:-$(get_vga)}"
+  local display_type="${2:-$(get_display)}"
+  local gpu_accel="${3:-$(get_gpu_accel)}"
+  local args=()
+
+  case "$vga_type" in
+    "none")
+      args+=("-vga" "none")
+      ;;
+    "std")
+      args+=("-vga" "std")
+      ;;
+    "virtio")
+      if [ "$gpu_accel" = "on" ]; then
+        args+=("-device" "virtio-vga-gl")
+      else
+        args+=("-device" "virtio-vga")
+      fi
+      ;;
+    "vmware")
+      args+=("-device" "vmware-svga")
+      ;;
+    "cirrus")
+      args+=("-vga" "cirrus")
+      ;;
+    *)
+      args+=("-vga" "none")  # Default fallback
+      ;;
+  esac
+
+  # Add display arguments
+  case "$display_type" in
+    "none")
+      args+=("-display" "none")
+      ;;
+    "gtk")
+      args+=("-display" "gtk")
+      ;;
+    "cocoa")
+      args+=("-display" "cocoa")
+      ;;
+    "vnc")
+      args+=("-display" "vnc=:1")
+      ;;
+  esac
+
+  printf '%s\n' "${args[@]}"
 }
 
 # Generate unique MAC address based on VM name
