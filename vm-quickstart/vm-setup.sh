@@ -91,12 +91,17 @@ if gh auth status > /dev/null 2>&1; then
     if [ -n "$github_username" ] && [ "$github_username" != "null" ]; then
         echo "   Logged in as: $github_username"
 
-        # Try to get email from GitHub API
+        # Try to get email from GitHub API (public email)
         github_email=$(gh api user --jq .email 2>/dev/null)
 
-        # If email is null/private, ask user
+        # If public email isn't available, try primary verified email endpoint (may require user:email scope)
         if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
-            echo "   Email is private in your GitHub profile"
+            github_email=$(gh api user/emails --jq '.[] | select(.primary==true and .verified==true) | .email' 2>/dev/null | head -n1)
+        fi
+
+        # If still unavailable, ask user
+        if [ "$github_email" = "null" ] || [ -z "$github_email" ]; then
+            echo "   Could not determine your email from GitHub (it may be private)."
             read -p "   Please enter your Git email: " github_email
         else
             echo "   Email: $github_email"
