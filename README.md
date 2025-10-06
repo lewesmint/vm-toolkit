@@ -34,7 +34,9 @@ A comprehensive QEMU-based virtual machine management toolkit **exclusively for 
 - **✅ CLI-Only Management**: No GUI required, perfect for automation and DevOps
 - **✅ Cloud-init Provisioning**: Industry-standard automated VM setup with SSH keys and packages
 - **✅ Nested Virtualization**: Full KVM support inside VMs for container development
-- **✅ VM Registry**: Centralized tracking of all VMs and their status
+- **✅ Enhanced VM Defaults**: Dynamic CPU allocation (host cores - 2), 16GB RAM, 60GB disk
+- **✅ VM Registry**: Live status tracking with static configuration storage
+- **✅ VM Reset**: Clean slate development while preserving Git/SSH credentials
 - **✅ Configurable Defaults**: Multiple configuration layers with precedence
 - **✅ Multi-Architecture Support**: x86_64, ARM64, i386 with optimal acceleration
 - **✅ Scriptable & Reproducible**: Perfect for infrastructure-as-code workflows
@@ -114,7 +116,7 @@ brew install jq
 ### 3. Create and Start Your First VM
 
 ```bash
-# Create a VM with defaults (x86_64)
+# Create a VM with enhanced defaults (x86_64, 12 cores, 16GB RAM, 60GB disk)
 vm create --name test
 
 # Create an ARM64 VM (faster on Apple Silicon)
@@ -139,10 +141,15 @@ ssh <username>@<vm-ip>
 vm create --name <vm-name> [options]    # Create a new VM
 vm start --name <vm-name> [options]     # Start a VM
 vm stop --name <vm-name> [options]      # Stop a VM
-vm status [--name <vm-name>]            # Show VM status
-vm list                                 # List all VMs
-vm destroy --name <vm-name> [options]   # Destroy a VM
-vm sync                                 # Sync registry
+vm pause --name <vm-name>               # Pause a running VM
+vm resume --name <vm-name>              # Resume a paused VM
+vm status [--name <vm-name>]            # Show VM status with live checking
+vm console --name <vm-name>             # Connect to VM console
+vm list                                 # Quick list of all VMs
+vm destroy --name <vm-name> [options]   # Destroy a VM completely
+vm reset --name <vm-name> [options]     # Reset VM to original state (preserve Git/SSH)
+vm sync                                 # Sync registry with actual VM state
+vm cleanup                              # Remove missing VMs from registry
 vm help                                 # Show help
 ```
 
@@ -174,12 +181,32 @@ vm start --name myvm \
 3. **User config file** (`~/.vm-toolkit-config`)
 4. **System defaults** (`vm-toolkit/vm-config.sh`)
 
+### Enhanced VM Defaults
+
+**Optimized for Modern Development:**
+- **CPU**: Dynamic allocation (host cores - 2, min 2, max 16)
+  - M4 Pro (14 cores) → VMs get 12 cores
+  - Automatically adapts to different host machines
+- **Memory**: 16GB RAM (up from 4GB)
+- **Disk**: 60GB storage (up from 40GB)
+- **Performance**: Optimized QEMU flags (explicit SMP topology, writeback cache)
+- **Networking**: Headless optimized (no GPU overhead)
+
+**Resource Efficiency:**
+- Uses 85.7% of host CPU cores (leaves 2 for host OS)
+- Uses 33.3% of host RAM on 48GB systems
+- Perfect balance of VM performance and host responsiveness
+
 ### User Configuration
 
 ```bash
 # Copy example config and customize
 cp vm-toolkit/examples/vm-toolkit-config.example ~/.vm-toolkit-config
 vim ~/.vm-toolkit-config
+
+# Override defaults if needed
+echo 'VM_MEM_MB="8192"' >> ~/.vm-toolkit-config    # Use 8GB instead of 16GB
+echo 'VM_DISK_SIZE="100G"' >> ~/.vm-toolkit-config # Use 100GB instead of 60GB
 ```
 
 ### Environment Variables
@@ -196,13 +223,24 @@ vm create --name workstation
 
 ## 🏗️ VM Registry
 
-The toolkit maintains a registry of all VMs in `.vm-registry.json`:
+The toolkit maintains a registry of all VMs with enhanced architecture:
+
+**Static Configuration Storage:**
+- VM metadata: name, hostname, username, disk size, memory, vCPUs
+- Creation details: OS version, architecture, MAC address, instance ID
+- Timestamps: created, updated
+
+**Live Status Computation:**
+- VM status computed in real-time from system state
+- No stale cached status - always current
+- Status includes: running, stopped, paused, initializing, booting
 
 ```bash
-vm list                    # Show all VMs with status
-vm status --name myvm      # Detailed status for specific VM
+vm list                    # Quick list with live status
+vm status --name myvm      # Detailed status with IP, uptime, SSH availability
 vm status --json           # JSON output for scripting
-vm sync                    # Sync registry with actual state (removes phantom VMs)
+vm sync                    # Sync registry (removes phantom VMs)
+vm cleanup                 # Remove missing VMs from registry
 ```
 
 ## 🏗️ Multi-Architecture Support
@@ -320,6 +358,32 @@ vm start --name test2 &
 vm list
 ```
 
+### VM Reset (Clean Slate Development)
+
+```bash
+# Reset VM to original cloud image state while preserving Git/SSH settings
+vm reset --name dev
+
+# What gets preserved:
+#   ✅ SSH keys (~/.ssh/)
+#   ✅ Git configuration (~/.gitconfig)
+#   ✅ GitHub CLI authentication (~/.config/gh/)
+
+# What gets reset:
+#   ❌ All installed packages (snap, apt, etc.)
+#   ❌ System configuration
+#   ❌ Other files in home directory
+
+# Options:
+vm reset --name dev --force              # Skip confirmation
+vm reset --name dev --preserve-home      # Keep entire home directory
+
+# Perfect for:
+# - Cleaning up after experiments
+# - Starting fresh but keeping Git access
+# - Removing accumulated cruft while preserving credentials
+```
+
 ## 🏗️ Architecture
 
 ### Registry Design (v1.1+)
@@ -335,6 +399,35 @@ The VM registry has been redesigned for better reliability:
 - `initializing` → Process running, no IP yet
 - `booting` → Process running, has IP, SSH not ready
 - `running` → Process running, has IP, SSH ready
+
+## 🚀 VM Quickstart Script
+
+The toolkit includes a quickstart script for setting up fresh VMs with development tools:
+
+**Location**: `vm-quickstart/vm-setup.sh`
+
+**What it does:**
+- Installs essential development tools (GitHub CLI, vim, htop, build-essential)
+- Authenticates with GitHub (browser-based)
+- Automatically configures Git with your GitHub credentials
+- Optionally clones repositories
+
+**Usage:**
+```bash
+# Copy to VM and run
+scp vm-quickstart/vm-setup.sh mintz@myvm:~/
+ssh mintz@myvm './vm-setup.sh'
+
+# Or copy to specific directory
+ssh mintz@myvm "mkdir -p ~/kube"
+scp vm-quickstart/vm-setup.sh mintz@myvm:~/kube/
+ssh mintz@myvm 'cd ~/kube && ./vm-setup.sh'
+```
+
+**Perfect for:**
+- Setting up fresh VMs quickly
+- Standardizing development environments
+- Getting GitHub access configured automatically
 
 ## 🔧 Troubleshooting
 

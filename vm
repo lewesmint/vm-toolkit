@@ -35,6 +35,7 @@ Commands:
   console               Connect to a running VM's console
   list                  Quick list of all VMs (fast, registry-only)
   destroy               Completely destroy a VM and all its data
+  reset                 Reset VM to original state (preserve Git/SSH)
   sync                  Sync registry with actual VM state
   cleanup               Remove missing VMs from registry
   help                  Show this help
@@ -52,6 +53,7 @@ Examples:
   $0 list
   $0 stop --name myvm
   $0 destroy --name myvm
+  $0 reset --name myvm
 
 Configuration:
   Edit ~/.vm-toolkit-config or vm-toolkit/vm-config.sh
@@ -101,6 +103,9 @@ case "$COMMAND" in
   ;;
 "destroy")
   exec "$TOOLKIT_DIR/destroy-vm.sh" "$@"
+  ;;
+"reset")
+  exec "$TOOLKIT_DIR/reset-vm.sh" "$@"
   ;;
 "sync")
   sync_registry
