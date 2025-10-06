@@ -34,7 +34,8 @@ sudo apt update
 log_info "Installing essential tools..."
 sudo apt install -y \
     ca-certificates \
-    gnupg
+    gnupg \
+    yamllint
 
 sudo snap install task --classic
 
@@ -144,6 +145,7 @@ log_success "🎉 VM setup complete!"
 echo ""
 echo "📋 What was installed:"
 echo "   ✅ Essential development tools"
+echo "   ✅ yamllint (YAML linter)"
 echo "   ✅ Task (Taskfile.yml task runner)"
 echo "   ✅ GitHub CLI (with git as dependency)"
 echo "   ✅ GitHub authentication"
