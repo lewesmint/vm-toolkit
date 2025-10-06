@@ -86,13 +86,8 @@ if [ -z "$VM_NAME" ]; then
   exit 1
 fi
 
-# Check if VM exists
-if ! vm_exists "$VM_NAME"; then
-  error "VM '$VM_NAME' does not exist"
-  exit 1
-fi
-
-VM_DIR="$VM_BASE_DIR/vms/$VM_NAME"
+# Check if VM exists and get directory
+VM_DIR=$(ensure_vm_exists "$VM_NAME")
 
 # Check if VM is running
 VM_STATUS=$(get_vm_status "$VM_NAME")
@@ -131,44 +126,66 @@ fi
 
 log "Resetting VM: $VM_NAME"
 
-# Step 1: Backup settings if VM is accessible
-if [ "$VM_STATUS" = "running" ]; then
-  log "Backing up Git and SSH settings..."
-  
-  VM_USERNAME=$(get_vm_info "$VM_NAME" username)
-  
-  if [ "$PRESERVE_HOME" = true ]; then
-    # Backup entire home directory
-    ssh "$VM_USERNAME@$VM_NAME" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
-      error "Failed to backup home directory. VM may not be accessible via SSH."
+# Step 1: Start VM if needed and backup settings
+VM_USERNAME=$(get_vm_info "$VM_NAME" username)
+
+# Start VM if it's not running (needed for backup)
+if [ "$VM_STATUS" != "running" ]; then
+  log "Starting VM to backup settings..."
+  "$SCRIPT_DIR/start-vm.sh" "$VM_NAME"
+
+  # Wait for VM to be ready
+  log "Waiting for VM to be ready..."
+  for i in {1..30}; do
+    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$VM_USERNAME@$VM_NAME" "echo 'SSH ready'" >/dev/null 2>&1; then
+      break
+    fi
+    if [ $i -eq 30 ]; then
+      error "VM did not become accessible via SSH within 5 minutes"
       exit 1
-    }
-  else
-    # Backup only Git and SSH settings
-    ssh "$VM_USERNAME@$VM_NAME" "
-      mkdir -p /tmp/preserve
-      cp -r ~/.ssh /tmp/preserve/ 2>/dev/null || true
-      cp ~/.gitconfig /tmp/preserve/ 2>/dev/null || true
-      cp -r ~/.config/gh /tmp/preserve/ 2>/dev/null || true
-      
-      # Create restore script
-      cat > /tmp/preserve/restore.sh << 'EOF'
+    fi
+    sleep 10
+  done
+fi
+
+log "Backing up settings..."
+
+if [ "$PRESERVE_HOME" = true ]; then
+  # Backup entire home directory
+  ssh "$VM_USERNAME@$VM_NAME" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
+    error "Failed to backup home directory. VM may not be accessible via SSH."
+    exit 1
+  }
+else
+  # Backup only Git and SSH settings
+  ssh "$VM_USERNAME@$VM_NAME" "
+    mkdir -p /tmp/preserve
+    cp -r ~/.ssh /tmp/preserve/ 2>/dev/null || true
+    cp ~/.gitconfig /tmp/preserve/ 2>/dev/null || true
+    cp -r ~/.config/gh /tmp/preserve/ 2>/dev/null || true
+
+    # Create restore script
+    cat > /tmp/preserve/restore.sh << 'EOF'
 #!/bin/bash
 echo '🔄 Restoring Git and SSH settings...'
 mkdir -p ~/.config
+
+# Restore from backup
 cp -r /tmp/preserve/.ssh ~/ 2>/dev/null || true
 cp /tmp/preserve/.gitconfig ~/ 2>/dev/null || true
 cp -r /tmp/preserve/gh ~/.config/ 2>/dev/null || true
+
+# Fix permissions
 chmod 700 ~/.ssh 2>/dev/null || true
 chmod 600 ~/.ssh/* 2>/dev/null || true
+
 echo '✅ Git and SSH settings restored'
 EOF
-      chmod +x /tmp/preserve/restore.sh
-    " || {
-      log "Warning: Could not backup settings (VM may not be accessible via SSH)"
-      log "Continuing with reset..."
-    }
-  fi
+    chmod +x /tmp/preserve/restore.sh
+  " || {
+    error "Failed to backup settings. VM may not be accessible via SSH."
+    exit 1
+  }
 fi
 
 # Step 2: Stop VM if running
@@ -207,7 +224,21 @@ for i in {1..30}; do
   sleep 10
 done
 
-# Step 6: Restore preserved settings
+# Step 6: Clean home directory (except for preserved items)
+if [ "$PRESERVE_HOME" = false ]; then
+  log "Cleaning home directory (preserving only Git/SSH settings)..."
+  ssh "$VM_USERNAME@$VM_NAME" "
+    # Remove all contents of home directory except preserved backup
+    find /home/$VM_USERNAME -mindepth 1 -maxdepth 1 ! -path '/tmp/preserve' -exec sudo rm -rf {} + 2>/dev/null || true
+
+    # Copy basic skeleton files to recreate clean home
+    sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
+    sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
+    sudo chmod 755 /home/$VM_USERNAME
+  "
+fi
+
+# Step 7: Restore preserved settings
 log "Restoring preserved settings..."
 
 if [ "$PRESERVE_HOME" = true ]; then
