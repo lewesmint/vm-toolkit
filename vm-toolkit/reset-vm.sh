@@ -190,7 +190,25 @@ fi
 
 # Step 2: Stop VM (it should be running now after backup)
 log "Stopping VM..."
-"$SCRIPT_DIR/stop-vm.sh" "$VM_NAME"
+if ! "$SCRIPT_DIR/stop-vm.sh" "$VM_NAME"; then
+  error "Failed to stop VM '$VM_NAME'"
+  exit 1
+fi
+
+# Wait for VM to actually stop
+log "Waiting for VM to stop..."
+for i in {1..30}; do
+  current_status=$(get_vm_status "$VM_NAME")
+  if [ "$current_status" = "stopped" ]; then
+    log "VM stopped successfully"
+    break
+  fi
+  if [ $i -eq 30 ]; then
+    error "VM did not stop within 5 minutes"
+    exit 1
+  fi
+  sleep 10
+done
 
 # Step 3: Reset with fresh instance-id
 log "Resetting VM with fresh instance-id..."
@@ -226,8 +244,8 @@ done
 if [ "$PRESERVE_HOME" = false ]; then
   log "Cleaning home directory (preserving only Git/SSH settings)..."
   ssh "$VM_USERNAME@$VM_NAME" "
-    # Remove all contents of home directory except preserved backup
-    find /home/$VM_USERNAME -mindepth 1 -maxdepth 1 ! -path '/tmp/preserve' -exec sudo rm -rf {} + 2>/dev/null || true
+    # Remove all contents of home directory
+    sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
 
     # Copy basic skeleton files to recreate clean home
     sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
