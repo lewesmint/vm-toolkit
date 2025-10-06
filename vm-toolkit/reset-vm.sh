@@ -188,11 +188,9 @@ EOF
   }
 fi
 
-# Step 2: Stop VM if running
-if [ "$VM_STATUS" = "running" ]; then
-  log "Stopping VM..."
-  "$SCRIPT_DIR/stop-vm.sh" "$VM_NAME"
-fi
+# Step 2: Stop VM (it should be running now after backup)
+log "Stopping VM..."
+"$SCRIPT_DIR/stop-vm.sh" "$VM_NAME"
 
 # Step 3: Reset with fresh instance-id
 log "Resetting VM with fresh instance-id..."
