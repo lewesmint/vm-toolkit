@@ -44,6 +44,38 @@ vm_fast_get_qemu_ps() {
   fi
 }
 
+# Extract candidate IPs from the VM console log (best-effort)
+get_vm_ips_from_console() {
+  local vm_name="$1"
+  local vm_dir="${VM_BASE_DIR}/$vm_name"
+
+  local console_file="$vm_dir/console.log"
+  if [ ! -f "$console_file" ]; then
+    return
+  fi
+
+  # Read last 400 lines, extract IPv4s, prefer RFC1918 ranges and preserve order
+  tail -n 400 "$console_file" 2>/dev/null |
+    grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' |
+    awk 'BEGIN{seen[""]=0} {
+      ip=$0;
+      # quick sanity: octets 0-255
+      split(ip, o, ".");
+      valid=1; for(i=1;i<=4;i++){ if(o[i]<0 || o[i]>255){ valid=0; break } }
+      if(!valid) next;
+      # prefer RFC1918 addresses
+      rfc1918 = (o[1]==10) || (o[1]==172 && o[2]>=16 && o[2]<=31) || (o[1]==192 && o[2]==168);
+      if(!(ip in seen)){
+        # tag with preference score (lower is better)
+        score = rfc1918 ? 0 : 1;
+        print score, ip;
+        seen[ip]=1;
+      }
+    }' |
+    sort -k1,1n |
+    awk '{print $2}'
+}
+
 # Fix registry file ownership if running as root via sudo
 fix_registry_ownership() {
   if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ] && [ -f "$REGISTRY_FILE" ]; then
@@ -282,7 +314,11 @@ get_vm_status() {
 
       # Process is running, now check if it has an IP address
       local vm_ip
-      vm_ip=$(get_vm_ip "$vm_name")
+      if [ "${VM_STATUS_FAST:-false}" = true ] || [ "${VM_STATUS_BASIC:-false}" = true ]; then
+        vm_ip=$(get_vm_ip "$vm_name")
+      else
+        vm_ip=$(get_vm_best_ip "$vm_name")
+      fi
 
       if [ -n "$vm_ip" ]; then
         # Has IP address, check if SSH is ready
@@ -545,36 +581,83 @@ get_vm_best_ip() {
 
   local ips
   ips=$(get_vm_ips_for_mac "$vm_name")
-  if [ -z "$ips" ]; then
-    # Fallback to DNS like get_vm_ip does
-    local vm_dir="${VM_BASE_DIR}/$vm_name"
-    local hostname="$vm_name"
+
+  # Optionally include DNS-resolved IP even if ARP has entries (to avoid stale ARP)
+  local vm_dir="${VM_BASE_DIR}/$vm_name"
+  local hostname="$vm_name"
+  local dns_ip=""
+  if [ "${VM_STATUS_FAST:-false}" != true ]; then
     if [ -f "$vm_dir/cloud-init/user-data" ]; then
       local ci_hn
       ci_hn=$(grep -E "^hostname:" "$vm_dir/cloud-init/user-data" | awk '{print $2}' | tr -d '\r')
       if [ -n "$ci_hn" ]; then hostname="$ci_hn"; fi
     fi
     if command -v dscacheutil >/dev/null 2>&1; then
-      local dns_ip
       dns_ip=$(dscacheutil -q host -a name "$hostname" 2>/dev/null | awk '/ip_address:/ {print $2; exit}')
-      if [ -n "$dns_ip" ]; then
-        ips="$dns_ip"
-      fi
-    fi
-    if [ -z "$ips" ]; then
-      return
     fi
   fi
 
+  # Build candidate list: prefer DNS IP first (if present), then ARP IPs
+  local candidates=""
+  if [ -n "$dns_ip" ]; then
+    # If DNS IP doesn't respond and ARP says '(incomplete)', treat as stale and skip
+    local dns_ok=false
+    if timeout 1 nc -z "$dns_ip" 22 2>/dev/null; then
+      dns_ok=true
+    else
+      # Check ARP for incomplete entry
+      local arp_line
+      arp_line=$(arp -n "$dns_ip" 2>/dev/null | head -1)
+      if echo "$arp_line" | grep -qi '(incomplete)'; then
+        dns_ok=false
+      else
+        # If ARP has a real MAC (even if not our MAC), keep as a candidate
+        dns_ok=true
+      fi
+    fi
+    if [ "$dns_ok" = true ]; then
+      candidates="$dns_ip"
+    fi
+  fi
+  if [ -n "$ips" ]; then
+    # Append ARP IPs that are not the same as dns_ip
+    for ip in $ips; do
+      if [ "$ip" != "$dns_ip" ]; then
+        candidates+=" $ip"
+      fi
+    done
+  fi
+
+  # Add console-derived IPs (best effort) to the end, dedup
+  local console_ips
+  console_ips=$(get_vm_ips_from_console "$vm_name" 2>/dev/null || true)
+  if [ -n "$console_ips" ]; then
+    for ip in $console_ips; do
+      case " $candidates " in
+        *" $ip "*) :;;
+        *) candidates+=" $ip" ;;
+      esac
+    done
+  fi
+
+  if [ -z "$candidates" ]; then
+    return
+  fi
+
   # Prefer the one that answers SSH quickly; otherwise first entry
-  for ip in $ips; do
+  for ip in $candidates; do
     if timeout 1 nc -z "$ip" 22 2>/dev/null; then
       echo "$ip"
       return
     fi
   done
 
-  echo "$ips" | head -1
+  # None answered SSH: return DNS IP if present, else first ARP IP
+  if [ -n "$dns_ip" ]; then
+    echo "$dns_ip"
+  else
+    echo "$ips" | head -1
+  fi
 }
 
 

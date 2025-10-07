@@ -167,8 +167,8 @@ done
 
 log "Using hostname for SSH: $VM_NAME"
 
-# Quick SSH port check
-if ! nc -z -w 3 "$VM_IP" 22; then
+# Quick SSH port check using hostname
+if ! nc -z -w 3 "$VM_NAME" 22 >/dev/null 2>&1; then
   log "SSH not ready yet, will wait during backup phase"
 fi
 
@@ -216,17 +216,17 @@ fi
 
 # Turn OFF for reset
 log "Stopping VM for reset..."
-"$SCRIPT_DIR/stop-vm.sh" "$ORIGINAL_VM_NAME" || {
+"$SCRIPT_DIR/stop-vm.sh" "$VM_NAME" || {
   error "Failed to stop VM"
   exit 1
 }
 
 # Check if QEMU process is actually gone
 log "Verifying VM is actually stopped..."
-if ps aux | grep -v grep | grep "${ORIGINAL_VM_NAME}.qcow2" >/dev/null; then
+if ps aux | grep -v grep | grep "${VM_NAME}.qcow2" >/dev/null; then
   log "WARNING: QEMU process still running after stop command"
   log "Killing remaining processes..."
-  pkill -f "${ORIGINAL_VM_NAME}.qcow2" || true
+  pkill -f "${VM_NAME}.qcow2" || true
   sleep 2
 else
   log "VM process confirmed stopped"
@@ -237,7 +237,7 @@ log "Resetting VM with fresh instance-id..."
 cd "$VM_DIR"
 
 # Generate new instance-id to force cloud-init re-run
-INSTANCE_ID="iid-${ORIGINAL_VM_NAME}-$(date +%s)"
+INSTANCE_ID="iid-${VM_NAME}-$(date +%s)"
 echo "$INSTANCE_ID" > "cloud-init/instance-id"
 
 log "Generated new instance ID: $INSTANCE_ID"
@@ -245,7 +245,7 @@ log "Generated new instance ID: $INSTANCE_ID"
 # Step 3: Start VM (retry if locked)
 log "Starting reset VM..."
 for i in {1..10}; do
-  if "$SCRIPT_DIR/start-vm.sh" "$ORIGINAL_VM_NAME" 2>/dev/null; then
+  if "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" 2>/dev/null; then
     log "VM started successfully"
     break
   fi

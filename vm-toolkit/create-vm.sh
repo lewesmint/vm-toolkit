@@ -505,13 +505,19 @@ fi
 # Add OS-specific commands only for special OS types (not basic ubuntu)
 case "$VM_OS" in
 "ubuntu")
-  # No runcmd needed for basic ubuntu - SSH is enabled by default in cloud images
+  # Ensure SSH service is enabled and started (avoid socket-activation delays)
+  echo "runcmd:" >>"cloud-init/user-data"
+  echo "  - systemctl enable --now ssh" >>"cloud-init/user-data"
   ;;
 "debian")
-  # No runcmd needed for basic debian - SSH is enabled by default in cloud images
+  # Ensure SSH service is enabled and started
+  echo "runcmd:" >>"cloud-init/user-data"
+  echo "  - systemctl enable --now ssh" >>"cloud-init/user-data"
   ;;
 "fedora"|"centos")
-  # No runcmd needed for basic fedora/centos - SSH is enabled by default in cloud images
+  # Ensure SSH service is enabled and started (service name is sshd)
+  echo "runcmd:" >>"cloud-init/user-data"
+  echo "  - systemctl enable --now sshd" >>"cloud-init/user-data"
   ;;
 "k3s")
   # Add runcmd section for special OS types
