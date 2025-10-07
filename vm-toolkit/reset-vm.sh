@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # VM Reset Script
-# Resets a VM to original state while preserving Git and SSH settings
+# Resets a VM to original state while keeping selected user settings
 
 set -e
 
@@ -15,44 +15,53 @@ show_usage() {
   cat << EOF
 Usage: $0 <vm-name> [options]
 
-Reset a VM to original cloud image state while preserving Git and SSH settings.
+Reset a VM to original cloud image state while keeping selected user settings.
 
 Required:
   <vm-name>             VM name to reset
 
 Options:
-  --preserve-home       Preserve entire home directory (default: only Git/SSH)
+  --keep-home           Keep entire home directory (default: only items from keep.list)
   --force               Skip confirmation prompt
   --help                Show this help
 
 Examples:
-  $0 gamma                    # Reset gamma, preserve Git/SSH only
-  $0 gamma --preserve-home    # Reset gamma, preserve entire home
+  $0 gamma                    # Reset gamma, keep items from keep.list (SSH/Git/GH by default)
+  $0 gamma --keep-home        # Reset gamma, keep entire home
   $0 gamma --force            # Reset without confirmation
 
-What gets preserved:
-  - ~/.ssh/ (SSH keys and config)
-  - ~/.gitconfig (Git configuration)
-  - ~/.config/gh/ (GitHub CLI config)
+What gets kept:
+  - Items from keep list (configurable):
+    - Default: ~/.ssh, ~/.gitconfig, ~/.config/gh
+    - Config file search order:
+      1) $VM_KEEP_LIST_FILE (env var)
+      2) ~/.vm-toolkit-keep.list
+      3) <project>/keep.list
+      4) <toolkit>/keep.list
 
 What gets reset:
   - All system packages (back to cloud image)
   - All installed software (snap, apt packages, etc.)
   - System configuration
-  - Everything else in home directory (unless --preserve-home)
+  - Everything else in home directory (unless --keep-home)
 
 EOF
 }
 
 # Parse arguments
 VM_NAME=""
-PRESERVE_HOME=false
+KEEP_HOME=false
 FORCE_RESET=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --keep-home)
+      KEEP_HOME=true
+      shift
+      ;;
+    # Back-compat
     --preserve-home)
-      PRESERVE_HOME=true
+      KEEP_HOME=true
       shift
       ;;
     --force)
@@ -100,19 +109,17 @@ if [ "$FORCE_RESET" = false ]; then
   echo "⚠️  WARNING: This will reset VM '$VM_NAME' to original cloud image state!"
   echo ""
   echo "What will be preserved:"
-  if [ "$PRESERVE_HOME" = true ]; then
+  if [ "$KEEP_HOME" = true ]; then
     echo "  ✅ Entire home directory (/home/$(get_vm_info "$VM_NAME" | jq -r '.username // "mintz"'))"
   else
-    echo "  ✅ SSH keys and config (~/.ssh/)"
-    echo "  ✅ Git configuration (~/.gitconfig)"
-    echo "  ✅ GitHub CLI config (~/.config/gh/)"
+    echo "  ✅ Items from keep list (default: ~/.ssh, ~/.gitconfig, ~/.config/gh)"
   fi
   echo ""
   echo "What will be reset:"
   echo "  ❌ All system packages (snap, apt, etc.)"
   echo "  ❌ All installed software"
   echo "  ❌ System configuration"
-  if [ "$PRESERVE_HOME" = false ]; then
+  if [ "$KEEP_HOME" = false ]; then
     echo "  ❌ Other files in home directory"
   fi
   echo ""
@@ -174,7 +181,7 @@ fi
 
 # Backup settings (VM is now guaranteed to be running)
 log "Backing up settings..."
-if [ "$PRESERVE_HOME" = true ]; then
+if [ "$KEEP_HOME" = true ]; then
   log "  - Preserving entire home directory" 
   # Backup entire home directory
   ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
@@ -183,31 +190,41 @@ if [ "$PRESERVE_HOME" = true ]; then
   }
     log "Post-backup - Preserving entire home directory" 
 else
-  # Backup only Git and SSH settings
+  # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI)
+  KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
   ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
-    mkdir -p /tmp/preserve
-    cp -r ~/.ssh /tmp/preserve/ 2>/dev/null || true
-    cp ~/.gitconfig /tmp/preserve/ 2>/dev/null || true
-    cp -r ~/.config/gh /tmp/preserve/ 2>/dev/null || true
+    set -e
+    mkdir -p /tmp/keep
+    for item in $KEEP_ITEMS; do
+      # Copy directories or files if they exist
+      if [ -e \"~/\$item\" ]; then
+        mkdir -p \"/tmp/keep/\$(dirname \"$item\")\"
+        cp -a \"~/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
+      fi
+    done
 
     # Create restore script
-    cat > /tmp/preserve/restore.sh << 'EOF'
+    cat > /tmp/keep/restore.sh << 'EOF'
 #!/bin/bash
-echo '🔄 Restoring Git and SSH settings...'
+set -e
+echo '🔄 Restoring kept settings...'
+KEEP_ITEMS=($(cat /tmp/keep/.list 2>/dev/null || true))
 mkdir -p ~/.config
-
-# Restore from backup
-cp -r /tmp/preserve/.ssh ~/ 2>/dev/null || true
-cp /tmp/preserve/.gitconfig ~/ 2>/dev/null || true
-cp -r /tmp/preserve/gh ~/.config/ 2>/dev/null || true
-
-# Fix permissions
-chmod 700 ~/.ssh 2>/dev/null || true
-chmod 600 ~/.ssh/* 2>/dev/null || true
-
-echo '✅ Git and SSH settings restored'
+for item in "${KEEP_ITEMS[@]}"; do
+  src="/tmp/keep/$item"
+  dest="$HOME/$item"
+  if [ -e "$src" ]; then
+    mkdir -p "$(dirname "$dest")"
+    cp -a "$src" "$dest" 2>/dev/null || true
+  fi
+done
+# Fix common SSH perms if present
+[ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
+echo '✅ Kept settings restored'
 EOF
-    chmod +x /tmp/preserve/restore.sh
+    chmod +x /tmp/keep/restore.sh
+    # Save the keep list for restore
+    printf '%s\n' $KEEP_ITEMS > /tmp/keep/.list
   " || {
     error "Failed to backup settings"
     exit 1
@@ -312,9 +329,9 @@ for i in {1..30}; do
   sleep 10
 done
 
-# Step 5: Clean home directory (except for preserved items)
-if [ "$PRESERVE_HOME" = false ]; then
-  log "Cleaning home directory (preserving only Git/SSH settings)..."
+# Step 5: Clean home directory (except for kept items)
+if [ "$KEEP_HOME" = false ]; then
+  log "Cleaning home directory (keeping items from keep.list)..."
   ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
     # Remove all contents of home directory
     sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
@@ -326,10 +343,10 @@ if [ "$PRESERVE_HOME" = false ]; then
   "
 fi
 
-# Step 6: Restore preserved settings
-log "Restoring preserved settings..."
+# Step 6: Restore kept settings
+log "Restoring kept settings..."
 
-if [ "$PRESERVE_HOME" = true ]; then
+if [ "$KEEP_HOME" = true ]; then
   # Restore entire home directory
   ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
     cd /home
@@ -337,8 +354,8 @@ if [ "$PRESERVE_HOME" = true ]; then
     sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
   "
 else
-  # Restore only Git and SSH settings
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "/tmp/preserve/restore.sh" 2>/dev/null || {
+  # Restore only configured kept settings
+  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "/tmp/keep/restore.sh" 2>/dev/null || {
     log "Warning: Could not restore settings (backup may not exist)"
   }
 fi
@@ -347,10 +364,10 @@ log "✅ VM '$VM_NAME' reset successfully!"
 log ""
 log "Summary:"
 log "  - VM reset to original cloud image state"
-if [ "$PRESERVE_HOME" = true ]; then
+if [ "$KEEP_HOME" = true ]; then
   log "  - Home directory preserved"
 else
-  log "  - Git and SSH settings preserved"
+  log "  - Kept settings restored from list ($(get_keep_items | paste -sd, -))"
 fi
 log "  - All system packages and software reset"
 log ""

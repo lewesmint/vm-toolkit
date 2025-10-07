@@ -1,0 +1,6 @@
+# Items to keep during VM reset (paths relative to the VM user's home)
+# Lines starting with # are comments.
+# Default items:
+.ssh
+.gitconfig
+.config/gh

@@ -147,7 +147,9 @@ vm status [--name <vm-name>]            # Show VM status with live checking
 vm console --name <vm-name>             # Connect to VM console
 vm list                                 # Quick list of all VMs
 vm destroy --name <vm-name> [options]   # Destroy a VM completely
-vm reset --name <vm-name> [options]     # Reset VM to original state (preserve Git/SSH)
+vm reset --name <vm-name> [options]     # Reset VM to original state (keep items from keep.list or entire home)
+vm clone <src> <tgt> [options]          # Clone an existing VM to a new one
+vm hosts-sync [--apply] [vms...]        # Sync /etc/hosts with best IPs for VMs
 vm sync                                 # Sync registry with actual VM state
 vm cleanup                              # Remove missing VMs from registry
 vm help                                 # Show help
@@ -221,6 +223,33 @@ export VM_DISK_SIZE="100G"
 vm create --name workstation
 ```
 
+### Keep List Configuration (for Resets and Post-Clone)
+
+The toolkit can keep selected user items during a reset (and optional post-clone cleanup) using a configurable keep list.
+
+- Defaults kept:
+  - `~/.ssh`
+  - `~/.gitconfig`
+  - `~/.config/gh`
+- Configuration file search order (highest precedence first):
+  1) `$VM_KEEP_LIST_FILE` (env var, if set)
+  2) `~/.vm-toolkit-keep.list`
+  3) `<project>/vm-toolkit/keep.list`
+  4) Toolkit default: `<repo>/vm-toolkit/keep.list`
+- Backward compatibility: `VM_PRESERVE_LIST_FILE`, `~/.vm-toolkit-preserve.list`, and `<project>/vm-toolkit/preserve.list` are still honored if present.
+
+Example `keep.list`:
+
+```
+# Paths are relative to the VM user's home
+.ssh
+.gitconfig
+.config/gh
+# Add more as needed, e.g.:
+.config/nvim
+.config/fish
+```
+
 ## 🏗️ VM Registry
 
 The toolkit maintains a registry of all VMs with enhanced architecture:
@@ -242,6 +271,20 @@ vm status --json           # JSON output for scripting
 vm sync                    # Sync registry (removes phantom VMs)
 vm cleanup                 # Remove missing VMs from registry
 ```
+
+### Status modes and IP selection
+
+Status collection prioritizes accuracy while offering faster modes:
+
+- Default mode: Uses multiple signals to find the “best IP”
+  - ARP (with MAC normalization on macOS)
+  - DNS fallback
+  - Console log parsing for DHCP-assigned IPs
+  - SSH reachability probe to avoid stale DNS/ARP
+- `--fast`: Skips slower checks like DNS resolution and stats
+- `--basic`: PID-only (no IP/SSH), fastest for quick overviews
+
+This logic reduces “initializing/booting” misreports when IPs change and DNS/ARP are stale.
 
 ## 🏗️ Multi-Architecture Support
 
@@ -361,10 +404,10 @@ vm list
 ### VM Reset (Clean Slate Development)
 
 ```bash
-# Reset VM to original cloud image state while preserving Git/SSH settings
+# Reset VM to original cloud image state while keeping selected settings
 vm reset --name dev
 
-# What gets preserved:
+# What gets kept by default (configurable via keep.list):
 #   ✅ SSH keys (~/.ssh/)
 #   ✅ Git configuration (~/.gitconfig)
 #   ✅ GitHub CLI authentication (~/.config/gh/)
@@ -375,13 +418,51 @@ vm reset --name dev
 #   ❌ Other files in home directory
 
 # Options:
-vm reset --name dev --force              # Skip confirmation
-vm reset --name dev --preserve-home      # Keep entire home directory
+vm reset --name dev --force         # Skip confirmation
+vm reset --name dev --keep-home     # Keep entire home directory
 
 # Perfect for:
 # - Cleaning up after experiments
 # - Starting fresh but keeping Git access
 # - Removing accumulated cruft while preserving credentials
+```
+
+### Clone VMs
+
+```bash
+# Clone src -> tgt, update hostname/username, and force re-provisioning
+vm clone src tgt --hostname tgt --username developer --fresh
+
+# Clone and immediately reset the new VM, keeping only keep.list items
+vm clone src tgt --reset
+
+# Clone and keep entire home on the reset (post-clone)
+vm clone src tgt --reset --keep-home
+```
+
+Notes:
+- The overlay disk is rebased to the new base image automatically.
+- A new MAC address is generated for the target VM.
+- Safety: cloning a running VM is blocked unless `--force` is provided.
+- `--fresh` regenerates the cloud-init instance-id to re-run provisioning.
+
+### Sync /etc/hosts with VM IPs
+
+```bash
+# Dry-run (shows proposed mappings)
+vm hosts-sync
+
+# Apply changes to /etc/hosts (requires sudo)
+vm hosts-sync --apply
+
+# Only specific VMs
+vm hosts-sync --apply alpha bravo
+```
+
+This helper writes the toolkit’s “best” IP for each VM into `/etc/hosts` to avoid stale DNS/ARP. On macOS, you can flush caches if needed:
+
+```bash
+sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder
 ```
 
 ## 🏗️ Architecture
@@ -438,11 +519,16 @@ ssh mintz@myvm 'cd ~/kube && ./vm-setup.sh'
 ### Can't find VM IP
 - Wait 1-2 minutes for boot and DHCP
 - Check: `vm status --name <vm-name>`
+- Try faster status modes if you only need a snapshot: `vm status --fast` or `vm status --basic`
 - Sync registry: `vm sync`
+- If DNS/ARP is stale on macOS, run: `vm hosts-sync --apply` and then flush caches (`sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder`)
 
-### SSH connection refused
-- VM may still be booting (check console: `tail -f <vm-name>/console.log`)
-- Check SSH service: `vm status --name <vm-name>`
+### SSH connection refused or slow to appear
+- VM may still be booting (check console: `tail -f vm-toolkit-data/vms/<vm>/console.log`)
+- The toolkit enables and starts SSH via cloud-init on major OSes:
+  - Ubuntu/Debian: `systemctl enable --now ssh`
+  - Fedora/CentOS: `systemctl enable --now sshd`
+- Give it a minute for cloud-init to finish; status will indicate SSH reachability.
 
 ## 🎊 Success Criteria
 

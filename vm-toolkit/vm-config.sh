@@ -588,6 +588,58 @@ get_vm_dir() {
   echo "$canonical_dir"
 }
 
+# Keep list configuration for resets
+## Backward compatibility
+# Accept old names via env and files, but prefer new 'keep' naming.
+find_keep_list_file() {
+  # Env overrides
+  if [ -n "${VM_KEEP_LIST_FILE:-}" ] && [ -f "$VM_KEEP_LIST_FILE" ]; then
+    echo "$VM_KEEP_LIST_FILE"; return
+  fi
+  # Back-compat env
+  if [ -n "${VM_PRESERVE_LIST_FILE:-}" ] && [ -f "$VM_PRESERVE_LIST_FILE" ]; then
+    echo "$VM_PRESERVE_LIST_FILE"; return
+  fi
+  # User-level files
+  if [ -f "$HOME/.vm-toolkit-keep.list" ]; then
+    echo "$HOME/.vm-toolkit-keep.list"; return
+  fi
+  if [ -f "$HOME/.vm-toolkit-preserve.list" ]; then
+    echo "$HOME/.vm-toolkit-preserve.list"; return
+  fi
+  # Project-level files
+  if [ -f "$VM_PROJECT_DIR/keep.list" ]; then
+    echo "$VM_PROJECT_DIR/keep.list"; return
+  fi
+  if [ -f "$VM_PROJECT_DIR/preserve.list" ]; then
+    echo "$VM_PROJECT_DIR/preserve.list"; return
+  fi
+  # Toolkit defaults
+  local TOOLKIT_DIR
+  TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$TOOLKIT_DIR/keep.list" ]; then
+    echo "$TOOLKIT_DIR/keep.list"; return
+  fi
+  if [ -f "$TOOLKIT_DIR/preserve.list" ]; then
+    echo "$TOOLKIT_DIR/preserve.list"; return
+  fi
+  echo ""
+}
+
+# Output newline-separated keep items (relative to user's home on the VM)
+get_keep_items() {
+  local file
+  file=$(find_keep_list_file)
+  if [ -n "$file" ] && [ -f "$file" ]; then
+    sed -e 's/#.*$//' -e '/^[[:space:]]*$/d' "$file"
+  else
+    printf "%s\n" \
+      ".ssh" \
+      ".gitconfig" \
+      ".config/gh"
+  fi
+}
+
 # Dependency checking
 check_dependencies() {
   local missing=()

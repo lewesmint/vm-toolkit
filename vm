@@ -33,10 +33,11 @@ Commands:
   resume                Resume a paused VM
   status                Show detailed VM status with live checking
   hosts-sync            Sync /etc/hosts entries for VM names to best IPs
+  clone                 Clone an existing VM into a new VM
   console               Connect to a running VM's console
   list                  Quick list of all VMs (fast, registry-only)
   destroy               Completely destroy a VM and all its data
-  reset                 Reset VM to original state (preserve Git/SSH)
+  reset                 Reset VM to original state (keep items from keep.list or entire home)
   sync                  Sync registry with actual VM state
   cleanup               Remove missing VMs from registry
   help                  Show this help
@@ -97,10 +98,14 @@ case "$COMMAND" in
   exec "$TOOLKIT_DIR/status-vm.sh" "$@"
   ;;
 "hosts-sync"|"hosts")
-  exec "$TOOLKIT_DIR/hosts-sync.sh" "$@"
+  # Invoke via bash to avoid execute-bit issues on fresh checkouts
+  exec bash "$TOOLKIT_DIR/hosts-sync.sh" "$@"
   ;;
 "console")
   exec "$TOOLKIT_DIR/console-vm.sh" "$@"
+  ;;
+"clone")
+  exec bash "$TOOLKIT_DIR/clone-vm.sh" "$@"
   ;;
 "list")
   exec "$TOOLKIT_DIR/list-vms.sh" "$@"

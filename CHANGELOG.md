@@ -2,6 +2,35 @@
 
 All notable changes to the VM Toolkit project will be documented in this file.
 
+## [v1.2.0] - 2025-10-07
+
+### ✨ Features
+
+- Keep semantics and configuration
+	- Renamed “preserve” → “keep” across scripts and docs, with full backward compatibility
+	- Added configurable keep list used by resets and post-clone cleanup
+		- Search order: $VM_KEEP_LIST_FILE → ~/.vm-toolkit-keep.list → <project>/vm-toolkit/keep.list → toolkit default
+		- Back-compat supported: VM_PRESERVE_LIST_FILE and preserve.list files
+- Reset improvements
+	- Primary flag: `--keep-home` (keeps entire home); default keeps items from keep.list
+	- Fixed variable mismatch bugs and clarified logs/prompts
+- Clone workflow
+	- `--reset` to immediately clean the new VM while keeping items from keep.list
+	- New `--keep-home` (with --reset) to keep entire home during post-clone reset
+	- Overlay rebase fix: cloned qcow2 now correctly rebased to the new base filename
+- Name resolution helper
+	- New `vm hosts-sync` to map VM names to best IPs in /etc/hosts (dry-run/apply)
+	- macOS-safe sed usage and cache flush guidance
+- Status accuracy and performance
+	- Best-IP selection combines ARP (normalized MAC), DNS fallback, console-derived IPs, and SSH reachability
+	- Added `--fast` and `--basic` status modes for quicker overviews
+- SSH readiness
+	- Cloud-init runcmd enables/starts ssh/sshd for Ubuntu/Debian/Fedora/CentOS
+
+### 🧹 Misc
+
+- README refreshed to document keep.list, status modes, clone flags, hosts-sync, and troubleshooting for stale DNS/ARP
+
 ## [v1.1.0] - 2024-10-04
 
 ### 🏗️ **Major Architecture Improvements**

@@ -89,8 +89,9 @@ fi
 
 for vm in "${!proposed[@]}"; do
   ip="${proposed[$vm]}"
-  # Remove any existing lines mentioning the hostname as a word
-  sed -i '' "/(^|\t|\s)$vm(\s|\t|$)/d" "$tmp" 2>/dev/null || true
+  # Remove any existing non-comment lines that contain the hostname as a token
+  # macOS sed: use -E and POSIX character classes; protect comments
+  sed -i '' -E "/^[[:space:]]*#/!{/(^|[[:space:]])${vm}([[:space:]]|$)/d;}" "$tmp" 2>/dev/null || true
   # Append new mapping
   echo "$ip	$vm" >> "$tmp"
 done
