@@ -11,6 +11,18 @@ source "$SCRIPT_DIR/vm-config.sh"
 source "$SCRIPT_DIR/vm-registry.sh"
 source "$SCRIPT_DIR/vm-common.sh"
 
+# Normalize a possibly quoted path by stripping surrounding single/double quotes
+normalize_quoted_path() {
+  local p="$1"
+  # Strip surrounding double quotes
+  p="${p%\"}"
+  p="${p#\"}"
+  # Strip surrounding single quotes
+  p="${p%\'}"
+  p="${p#\'}"
+  echo "$p"
+}
+
 # Port check helper compatible with macOS/BSD nc
 port_check() {
   local host="$1" port="$2" timeout_secs="${3:-3}"
@@ -107,6 +119,9 @@ fi
 
 # Check if VM exists and get directory
 VM_DIR=$(ensure_vm_exists "$VM_NAME")
+# Host backup cache dir for this VM
+HOST_BACKUP_DIR="$VM_DIR/.reset-backup"
+mkdir -p "$HOST_BACKUP_DIR"
 
 # Check if VM is running
 VM_STATUS=$(get_vm_status "$VM_NAME")
@@ -148,75 +163,95 @@ VM_USERNAME=$(get_vm_info "$VM_NAME" | jq -r '.username // "mintz"')
 
 # SSH options for reset operations
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+# Preflight: detect host public key path for later seeding
+HOST_PUB_KEY_PATH="$(get_ssh_key)"
+HOST_PUB_KEY_PATH="$(normalize_quoted_path "$HOST_PUB_KEY_PATH")"
+if [ ! -f "$HOST_PUB_KEY_PATH" ]; then
+  warn "Host public key not found; SSH key seeding will be skipped"
+fi
 
 # Check current VM status
 log "DEBUG: About to call get_vm_status for $VM_NAME"
 CURRENT_VM_STATUS=$(get_vm_status "$VM_NAME")
 log "DEBUG: get_vm_status returned: $CURRENT_VM_STATUS"
 
-# Turn ON if needed
-if [ "$CURRENT_VM_STATUS" = "stopped" ] || [ "$CURRENT_VM_STATUS" = "missing" ]; then
-  log "VM is OFF - starting to backup settings..."
-  "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" --no-wait
-else
-  log "VM is already ON - proceeding with backup..."
+# Decide if we need to boot just to take a backup
+NEED_BACKUP=true
+if [ "$KEEP_HOME" = true ] && [ -f "$HOST_BACKUP_DIR/home-backup.tar.gz" ]; then
+  NEED_BACKUP=false
+elif [ "$KEEP_HOME" = false ] && [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+  NEED_BACKUP=false
 fi
 
-# Wait for VM to be running
-log "Waiting for VM to be running..."
-
-for i in {1..30}; do
-  VM_STATUS=$(get_vm_status "$VM_NAME")
-  log "Attempt $i: VM status = '$VM_STATUS'"
-
-  if [ "$VM_STATUS" = "running" ]; then
-    log "VM is running"
-    break
-  fi
-
-  if [ $i -eq 30 ]; then
-    error "VM did not reach running state within 5 minutes (VM status: $VM_STATUS)"
-    exit 1
-  fi
-
-  sleep 10
-done
-
-best_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
-if [ -n "$best_ip" ]; then
-  log "Using IP for SSH: $best_ip (from best-IP logic)"
-  SSH_HOST="$best_ip"
+if [ "$NEED_BACKUP" = false ]; then
+  log "Found existing host backup in $HOST_BACKUP_DIR; skipping pre-reset boot/backup"
 else
-  log "Best IP not yet known; will attempt hostname and retry when ready"
-  SSH_HOST="$VM_NAME"
+  # Turn ON if needed
+  if [ "$CURRENT_VM_STATUS" = "stopped" ] || [ "$CURRENT_VM_STATUS" = "missing" ]; then
+    log "VM is OFF - starting to backup settings..."
+    "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" --no-wait
+  else
+    log "VM is already ON - proceeding with backup..."
+  fi
+
+  # Backup will be performed below in the dedicated NEED_BACKUP block once the VM is confirmed running
 fi
 
-# Backup settings (VM is now guaranteed to be running)
-log "Backing up settings..."
-HOST_BACKUP_DIR="$VM_DIR/.reset-backup"
-mkdir -p "$HOST_BACKUP_DIR"
-if [ "$KEEP_HOME" = true ]; then
-  log "  - Preserving entire home directory (streaming to host)"
-  # Stream entire home directory to host file
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "tar -C /home -czf - $VM_USERNAME" > "$HOST_BACKUP_DIR/home-backup.tar.gz" || {
-    error "Failed to backup home directory"
-    exit 1
-  }
-else
-  # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI) to host
-  KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
-    set -e
-    mkdir -p /tmp/keep
-    for item in $KEEP_ITEMS; do
-      # Copy directories or files if they exist
-      if [ -e \"~/\$item\" ]; then
-        mkdir -p \"/tmp/keep/\$(dirname \"$item\")\"
-        cp -a \"~/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
-      fi
-    done
-    # Create restore script
-    cat > /tmp/keep/restore.sh << 'EOF'
+if [ "$NEED_BACKUP" = true ]; then
+  # Wait for VM to be running (only when taking a fresh backup)
+  log "Waiting for VM to be running..."
+
+  for i in {1..30}; do
+    VM_STATUS=$(get_vm_status "$VM_NAME")
+    log "Attempt $i: VM status = '$VM_STATUS'"
+
+    if [ "$VM_STATUS" = "running" ]; then
+      log "VM is running"
+      break
+    fi
+
+    if [ $i -eq 30 ]; then
+      error "VM did not reach running state within 5 minutes (VM status: $VM_STATUS)"
+      exit 1
+    fi
+
+    sleep 10
+  done
+
+  best_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+  if [ -n "$best_ip" ]; then
+    log "Using IP for SSH: $best_ip (from best-IP logic)"
+    SSH_HOST="$best_ip"
+  else
+    log "Best IP not yet known; will attempt hostname and retry when ready"
+    SSH_HOST="$VM_NAME"
+  fi
+
+  # Backup settings (VM is now guaranteed to be running)
+  if [ "$KEEP_HOME" = true ]; then
+    log "  - Preserving entire home directory (streaming to host)"
+    # Stream entire home directory to host file
+    ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "tar -C /home -czf - $VM_USERNAME" > "$HOST_BACKUP_DIR/home-backup.tar.gz" || {
+      error "Failed to backup home directory"
+      exit 1
+    }
+  else
+    # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI) to host
+    KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
+    ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
+      set -e
+      KEEP_ITEMS=\"$KEEP_ITEMS\"
+      mkdir -p /tmp/keep
+      for item in \$KEEP_ITEMS; do
+        # Copy directories or files if they exist
+        if [ -e \"\$HOME/\$item\" ]; then
+          dir=\$(dirname \"\$item\")
+          mkdir -p \"/tmp/keep/\$dir\"
+          cp -a \"\$HOME/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
+        fi
+      done
+      # Create restore script
+      cat > /tmp/keep/restore.sh << 'EOF'
 #!/bin/bash
 set -e
 echo '🔄 Restoring kept settings...'
@@ -234,15 +269,16 @@ done
 [ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
 echo '✅ Kept settings restored'
 EOF
-    chmod +x /tmp/keep/restore.sh
-    # Save the keep list for restore
-    printf '%s\n' $KEEP_ITEMS > /tmp/keep/.list
-    # Tar up /tmp/keep to stdout
-    tar -C /tmp -czf - keep
-  " > "$HOST_BACKUP_DIR/keep-backup.tar.gz" || {
-    error "Failed to backup kept items"
-    exit 1
-  }
+      chmod +x /tmp/keep/restore.sh
+      # Save the keep list for restore
+      printf '%s\n' \$KEEP_ITEMS > /tmp/keep/.list
+      # Tar up /tmp/keep to stdout
+      tar -C /tmp -czf - keep
+    " > "$HOST_BACKUP_DIR/keep-backup.tar.gz" || {
+      error "Failed to backup kept items"
+      exit 1
+    }
+  fi
 fi
 
 # Turn OFF for reset
@@ -405,6 +441,12 @@ log "Restoring kept settings..."
 if [ "$KEEP_HOME" = true ]; then
   # Upload home backup and restore in a single session that cleans and restores
   if [ -f "$HOST_BACKUP_DIR/home-backup.tar.gz" ]; then
+    # Upload host public key for in-session seeding (avoid later password prompts)
+    if [ -f "$HOST_PUB_KEY_PATH" ]; then
+      if scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_PUB_KEY_PATH" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/host_pub.key"; then :; else
+        warn "Failed to upload host public key; will rely on final seeding"
+      fi
+    fi
     scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_BACKUP_DIR/home-backup.tar.gz" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/home-backup.tar.gz" || true
     ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
       set -e
@@ -418,6 +460,17 @@ if [ "$KEEP_HOME" = true ]; then
       sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
       # Fix SSH perms if present
       [ -d /home/$VM_USERNAME/.ssh ] && chmod 700 /home/$VM_USERNAME/.ssh && chmod 600 /home/$VM_USERNAME/.ssh/* 2>/dev/null || true
+      # Ensure host pub key is present for key-based SSH going forward
+      if [ -f /tmp/host_pub.key ]; then
+        mkdir -p /home/$VM_USERNAME/.ssh
+        touch /home/$VM_USERNAME/.ssh/authorized_keys
+        chmod 700 /home/$VM_USERNAME/.ssh
+        chmod 600 /home/$VM_USERNAME/.ssh/authorized_keys
+        if ! grep -F -x -q -f /tmp/host_pub.key /home/$VM_USERNAME/.ssh/authorized_keys 2>/dev/null; then
+          cat /tmp/host_pub.key >> /home/$VM_USERNAME/.ssh/authorized_keys
+        fi
+        chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME/.ssh
+      fi
     " || log "Warning: Home restore encountered an issue"
   else
     log "Warning: Home backup not found; skipping restore"
@@ -425,6 +478,12 @@ if [ "$KEEP_HOME" = true ]; then
 else
   # Upload keep backup and restore in a single session that cleans and restores
   if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+    # Upload host public key for in-session seeding (avoid later password prompts)
+    if [ -f "$HOST_PUB_KEY_PATH" ]; then
+      if scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_PUB_KEY_PATH" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/host_pub.key"; then :; else
+        warn "Failed to upload host public key; will rely on final seeding"
+      fi
+    fi
     scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_BACKUP_DIR/keep-backup.tar.gz" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/keep-backup.tar.gz" || true
     ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
       set -e
@@ -432,14 +491,81 @@ else
       sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
       sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
       sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
-      # Extract keep payload and run restore script
+      # Extract keep payload (robust to bad tar)
       mkdir -p /tmp
-      tar -C /tmp -xzf /tmp/keep-backup.tar.gz
-      /tmp/keep/restore.sh || true
+      if tar -tzf /tmp/keep-backup.tar.gz >/dev/null 2>&1; then
+        tar -C /tmp -xzf /tmp/keep-backup.tar.gz || true
+      else
+        echo 'Warning: keep-backup tar appears corrupted; skipping extraction'
+      fi
+      restored=false
+      if [ -x /tmp/keep/restore.sh ]; then
+        /tmp/keep/restore.sh && restored=true || true
+      fi
+      if [ "\$restored" != true ]; then
+        echo 'Fallback restore: applying items from list'
+        if [ -f /tmp/keep/.list ]; then
+          while IFS= read -r item; do
+            [ -z "$item" ] && continue
+            if [ -e "/tmp/keep/$item" ]; then
+              mkdir -p "$(dirname "$HOME/$item")"
+              cp -a "/tmp/keep/$item" "$HOME/$item" 2>/dev/null || true
+            fi
+          done < /tmp/keep/.list
+        fi
+        [ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
+      fi
+      # Ensure host pub key is present for key-based SSH going forward
+      if [ -f /tmp/host_pub.key ]; then
+        mkdir -p ~/.ssh
+        touch ~/.ssh/authorized_keys
+        chmod 700 ~/.ssh
+        chmod 600 ~/.ssh/authorized_keys
+        if ! grep -F -x -q -f /tmp/host_pub.key ~/.ssh/authorized_keys 2>/dev/null; then
+          cat /tmp/host_pub.key >> ~/.ssh/authorized_keys
+        fi
+      fi
     " || log "Warning: Keep restore encountered an issue"
   else
     log "Warning: Keep backup not found; skipping restore"
   fi
+fi
+
+# Final: ensure authorized_keys exists by seeding from host key if missing
+HOST_PUB_KEY_PATH="$(get_ssh_key)"
+HOST_PUB_KEY_PATH="$(normalize_quoted_path "$HOST_PUB_KEY_PATH")"
+# Final: Only attempt extra seeding if we have key and remote auth still works
+if [ -f "$HOST_PUB_KEY_PATH" ]; then
+  if ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "true" >/dev/null 2>&1; then
+    # Upload the host public key (again) and check/append remotely to avoid local cat expansion
+    if scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_PUB_KEY_PATH" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/host_pub.key"; then
+      if ! ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "grep -F -x -q -f /tmp/host_pub.key ~/.ssh/authorized_keys 2>/dev/null"; then
+        log "Seeding authorized_keys from host public key to restore SSH access"
+        ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys && cat /tmp/host_pub.key >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" || true
+      fi
+    else
+      warn "Failed to upload host public key during final seeding step"
+    fi
+  fi
+fi
+
+# Verification: ensure all keep items exist after restore (fix up any misses like .gitconfig)
+if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+  KEEP_ITEMS_CHECK=$(get_keep_items | tr '\n' ' ')
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
+    set -e
+    if [ -f /tmp/keep/.list ]; then
+      while IFS= read -r item; do
+        [ -z \"\$item\" ] && continue
+        if [ ! -e \"\$HOME/\$item\" ] && [ -e \"/tmp/keep/\$item\" ]; then
+          mkdir -p \"\$(dirname \"\$HOME/\$item\")\"
+          cp -a \"/tmp/keep/\$item\" \"\$HOME/\$item\" 2>/dev/null || true
+        fi
+      done < /tmp/keep/.list
+    fi
+    # Normalize SSH permissions again just in case
+    [ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
+  " || true
 fi
 
 log "✅ VM '$VM_NAME' reset successfully!"

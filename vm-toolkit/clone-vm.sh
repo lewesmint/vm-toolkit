@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/vm-config.sh"
 source "$SCRIPT_DIR/vm-registry.sh"
+source "$SCRIPT_DIR/vm-common.sh"
 
 show_usage() {
   cat <<EOF
@@ -181,6 +182,101 @@ log "  - Check status: vm status $TGT_VM"
 
 # Optional post-clone reset that keeps only configured items (Git/SSH/GitHub by default)
 if [ "$POST_RESET" = true ]; then
+  # Try to preseed a backup from the source so the target reset can be single-boot
+  TGT_BACKUP_DIR="$TGT_DIR/.reset-backup"
+  mkdir -p "$TGT_BACKUP_DIR"
+  SRC_BACKUP_DIR="$SRC_DIR/.reset-backup"
+  if [ "$POST_RESET_KEEP_HOME" = true ]; then
+    if [ -f "$SRC_BACKUP_DIR/home-backup.tar.gz" ]; then
+      log "Preseeding home backup from source to target for single-boot reset"
+      cp "$SRC_BACKUP_DIR/home-backup.tar.gz" "$TGT_BACKUP_DIR/home-backup.tar.gz" || true
+    else
+      # Generate home-backup from source by briefly starting it (target remains single-boot)
+      SRC_WAS_RUNNING=false
+      SRC_STATUS_NOW=$(get_vm_status "$SRC_VM" || true)
+      if [[ ! "$SRC_STATUS_NOW" =~ ^(running|booting|initializing|paused)$ ]]; then
+        SRC_WAS_RUNNING=false
+        log "Starting source VM '$SRC_VM' briefly to gather entire home..."
+        "$SCRIPT_DIR/start-vm.sh" "$SRC_VM" --no-wait
+        for i in {1..18}; do
+          s=$(get_vm_status "$SRC_VM" || true)
+          if [ "$s" = "running" ]; then break; fi
+          sleep 10
+        done
+      else
+        SRC_WAS_RUNNING=true
+      fi
+
+      SRC_IP=$(get_vm_best_ip "$SRC_VM" 2>/dev/null || true)
+      if [ -n "$SRC_IP" ]; then
+        # Determine source username
+        SRC_USER="$TGT_USERNAME"
+        u=$(echo "$SRC_INFO" | jq -r '.username' 2>/dev/null || echo "")
+        if [ -n "$u" ] && [ "$u" != "null" ]; then SRC_USER="$u"; fi
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+        log "Streaming entire /home/$SRC_USER from source to target backup..."
+        if ssh $SSH_OPTS "$SRC_USER@$SRC_IP" "tar -C /home -czf - $SRC_USER" > "$TGT_BACKUP_DIR/home-backup.tar.gz" 2>/dev/null; then
+          :
+        else
+          log "Warning: Failed to preseed home-backup from source; proceeding without it"
+          rm -f "$TGT_BACKUP_DIR/home-backup.tar.gz" || true
+        fi
+      fi
+
+      if [ "$SRC_WAS_RUNNING" = false ]; then
+        log "Stopping source VM '$SRC_VM' after seeding home backup"
+        "$SCRIPT_DIR/stop-vm.sh" "$SRC_VM" >/dev/null 2>&1 || true
+      fi
+    fi
+  else
+    if [ -f "$SRC_BACKUP_DIR/keep-backup.tar.gz" ]; then
+      log "Preseeding keep backup from source to target for single-boot reset"
+      cp "$SRC_BACKUP_DIR/keep-backup.tar.gz" "$TGT_BACKUP_DIR/keep-backup.tar.gz" || true
+    else
+      # Attempt to generate keep-backup from source by briefly starting it (target remains single-boot)
+      SRC_WAS_RUNNING=false
+      SRC_STATUS_NOW=$(get_vm_status "$SRC_VM" || true)
+      if [[ ! "$SRC_STATUS_NOW" =~ ^(running|booting|initializing|paused)$ ]]; then
+        SRC_WAS_RUNNING=false
+        log "Starting source VM '$SRC_VM' briefly to gather keep items..."
+        "$SCRIPT_DIR/start-vm.sh" "$SRC_VM" --no-wait
+        # Wait until running (up to ~3 minutes)
+        for i in {1..18}; do
+          s=$(get_vm_status "$SRC_VM" || true)
+          if [ "$s" = "running" ]; then break; fi
+          sleep 10
+        done
+      else
+        SRC_WAS_RUNNING=true
+      fi
+
+      SRC_IP=$(get_vm_best_ip "$SRC_VM" 2>/dev/null || true)
+      if [ -n "$SRC_IP" ]; then
+        SRC_USER="$TGT_USERNAME"
+        # Prefer source-recorded username if available
+        u=$(echo "$SRC_INFO" | jq -r '.username' 2>/dev/null || echo "")
+        if [ -n "$u" ] && [ "$u" != "null" ]; then SRC_USER="$u"; fi
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+        KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
+        log "Gathering keep items from source and seeding target backup..."
+        # Upload helper and run it remotely to stream tarball
+        scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SCRIPT_DIR/scripts/prepare-keep-backup.sh" "$SRC_USER@$SRC_IP:/tmp/prepare-keep-backup.sh" 2>/dev/null || true
+        if ssh $SSH_OPTS "$SRC_USER@$SRC_IP" env KEEP_ITEMS="$KEEP_ITEMS" bash /tmp/prepare-keep-backup.sh > "$TGT_BACKUP_DIR/keep-backup.tar.gz" 2>/dev/null; then
+          :
+        else
+          log "Warning: Failed to preseed keep-backup from source; proceeding without it"
+          rm -f "$TGT_BACKUP_DIR/keep-backup.tar.gz" || true
+        fi
+      fi
+
+      # Stop source if we started it
+      if [ "$SRC_WAS_RUNNING" = false ]; then
+        log "Stopping source VM '$SRC_VM' after seeding backup"
+        "$SCRIPT_DIR/stop-vm.sh" "$SRC_VM" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
+
   if [ "$POST_RESET_KEEP_HOME" = true ]; then
     log "Running post-clone reset (--reset --keep-home) on '$TGT_VM' (keeping entire home)..."
     "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force --keep-home

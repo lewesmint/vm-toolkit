@@ -106,7 +106,7 @@ get_vm_ips_from_console() {
     return
   fi
 
-  # Read last 400 lines, extract IPv4s, prefer RFC1918 ranges and preserve order
+  # Read last 400 lines, extract IPv4s, filter non-routable, prefer RFC1918 ranges and preserve order
   tail -n 400 "$console_file" 2>/dev/null |
     grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' |
     awk 'BEGIN{seen[""]=0} {
@@ -115,6 +115,12 @@ get_vm_ips_from_console() {
       split(ip, o, ".");
       valid=1; for(i=1;i<=4;i++){ if(o[i]<0 || o[i]>255){ valid=0; break } }
       if(!valid) next;
+      # exclude non-routable/special addresses
+      if (ip=="0.0.0.0") next;              # unspecified
+      if (o[1]==127) next;                   # loopback
+      if (o[1]==169 && o[2]==254) next;      # link-local
+      if (ip=="255.255.255.255") next;      # broadcast
+      if (o[1]>=224) next;                   # multicast/reserved (224+)
       # prefer RFC1918 addresses
       rfc1918 = (o[1]==10) || (o[1]==172 && o[2]>=16 && o[2]<=31) || (o[1]==192 && o[2]==168);
       if(!(ip in seen)){
@@ -703,6 +709,13 @@ get_vm_best_ip() {
 
   # Prefer the one that answers SSH quickly; otherwise first entry
   for ip in $candidates; do
+    # skip non-routable/special addresses defensively
+    case "$ip" in
+      0.0.0.0|255.255.255.255) continue;;
+    esac
+    case "$ip" in
+      127.*|169.254.*) continue;;
+    esac
     if timeout 1 nc -z "$ip" 22 2>/dev/null; then
       echo "$ip"
       return
@@ -710,7 +723,15 @@ get_vm_best_ip() {
   done
 
   # None answered SSH: return the first candidate (ARP-derived preferred)
-  for ip in $candidates; do echo "$ip"; break; done
+  for ip in $candidates; do
+    case "$ip" in
+      0.0.0.0|255.255.255.255) continue;;
+    esac
+    case "$ip" in
+      127.*|169.254.*) continue;;
+    esac
+    echo "$ip"; break;
+  done
 }
 
 
