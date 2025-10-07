@@ -50,7 +50,7 @@ if ! is_vm_running "$VM_NAME" "$VM_DIR"; then
   exit 0
 fi
 
-PID=$(get_vm_pid "$VM_NAME" "$VM_DIR")
+PID=$(get_vm_pid_from_dir "$VM_NAME" "$VM_DIR")
 
 log "Stopping VM: $VM_NAME (PID: $PID)"
 
@@ -79,7 +79,7 @@ else
   # Wait for graceful shutdown
   log "Waiting up to ${TIMEOUT_SEC}s for graceful shutdown..."
   for _ in $(seq 1 "$TIMEOUT_SEC"); do
-    if ! kill -0 "$PID" 2>/dev/null; then
+    if ! sudo kill -0 "$PID" 2>/dev/null; then
       rm -f "$VM_DIR/${VM_NAME}.pid"
 
       # No registry update needed - status computed live

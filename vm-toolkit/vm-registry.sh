@@ -12,6 +12,38 @@ source "$SCRIPT_DIR/vm-config.sh"
 # Registry file location (use configured path or default)
 REGISTRY_FILE="${REGISTRY_FILE:-${VM_PROJECT_DIR}/.vm-registry.json}"
 
+# Optional fast-mode caches (populated when VM_STATUS_FAST=true)
+__VM_FAST_CACHE_INIT=false
+__ARP_CACHE=""
+__QEMU_PS_CACHE=""
+
+vm_fast_cache_init() {
+  if [ "${VM_STATUS_FAST:-false}" = true ] && [ "$__VM_FAST_CACHE_INIT" != true ]; then
+    # Cache ARP table and QEMU processes once per invocation to reduce latency
+    __ARP_CACHE=$(arp -a 2>/dev/null || true)
+    __QEMU_PS_CACHE=$(ps aux | grep "qemu-system-" | grep -v grep || true)
+    __VM_FAST_CACHE_INIT=true
+  fi
+}
+
+vm_fast_get_arp() {
+  if [ "${VM_STATUS_FAST:-false}" = true ]; then
+    vm_fast_cache_init
+    echo "$__ARP_CACHE"
+  else
+    arp -a 2>/dev/null || true
+  fi
+}
+
+vm_fast_get_qemu_ps() {
+  if [ "${VM_STATUS_FAST:-false}" = true ]; then
+    vm_fast_cache_init
+    echo "$__QEMU_PS_CACHE"
+  else
+    ps aux | grep "qemu-system-" | grep -v grep || true
+  fi
+}
+
 # Fix registry file ownership if running as root via sudo
 fix_registry_ownership() {
   if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ] && [ -f "$REGISTRY_FILE" ]; then
@@ -220,6 +252,7 @@ list_vms() {
 # Get VM status with live checking
 get_vm_status() {
   local vm_name="$1"
+
   local vm_dir="${VM_BASE_DIR}/$vm_name"
 
   # Check if VM directory exists
@@ -253,7 +286,11 @@ get_vm_status() {
 
       if [ -n "$vm_ip" ]; then
         # Has IP address, check if SSH is ready
-        if timeout 2 nc -z "$vm_ip" 22 2>/dev/null; then
+        if [ "${VM_STATUS_BASIC:-false}" = true ]; then
+          echo "running"
+        elif [ "${VM_STATUS_FAST:-false}" = true ]; then
+          echo "running"  # Assume running in fast mode
+        elif timeout 2 nc -z "$vm_ip" 22 2>/dev/null; then
           echo "running"  # Fully operational
         else
           echo "booting"  # Has IP but SSH not ready yet
@@ -280,10 +317,10 @@ get_vm_status() {
   local qemu_pids
   if [ -n "$vm_mac" ]; then
     # Search by MAC address (most reliable)
-    qemu_pids=$(ps aux | grep "qemu-system-x86_64" | grep "$vm_mac" | grep -v grep | awk '{print $2}' || true)
+    qemu_pids=$(vm_fast_get_qemu_ps | grep "qemu-system-x86_64" | grep "$vm_mac" | awk '{print $2}' || true)
   else
     # Fallback: search by disk file name
-    qemu_pids=$(ps aux | grep "qemu-system-x86_64" | grep "${vm_name}.qcow2" | grep -v grep | awk '{print $2}' || true)
+    qemu_pids=$(vm_fast_get_qemu_ps | grep "qemu-system-x86_64" | grep "${vm_name}.qcow2" | awk '{print $2}' || true)
   fi
 
   if [ -n "$qemu_pids" ]; then
@@ -366,6 +403,7 @@ get_vm_pid() {
 
 # Get VM IP address (only if VM is actually running)
 get_vm_ip() {
+
   local vm_name="$1"
   local vm_dir="${VM_BASE_DIR}/$vm_name"
 
@@ -374,6 +412,7 @@ get_vm_ip() {
   vm_pid=$(get_vm_pid "$vm_name")
   if [ -z "$vm_pid" ]; then
     # VM not running, don't return stale IP addresses
+
     return
   fi
 
@@ -382,42 +421,162 @@ get_vm_ip() {
   fi
 
   local mac
-  mac=$(cat "$vm_dir/${vm_name}.mac")
+  mac=$(cat "$vm_dir/${vm_name}.mac" | tr 'A-F' 'a-f')
 
-  # Method 1: Check console log for IP address (most reliable for fresh boots)
-  if [ -f "$vm_dir/console.log" ]; then
-    local console_ip
-    # Look for cloud-init network info table with IP and MAC: "| ens3 | True | 192.168.1.79 | 255.255.255.0 | global | 52:54:00:be:9d:58 |"
-    console_ip=$(grep -E '([0-9]{1,3}\.){3}[0-9]{1,3}.*([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}' "$vm_dir/console.log" 2>/dev/null | \
-      grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | \
-      grep -v '^127\.' | grep -v '255\.255' | head -1)
-    if [ -n "$console_ip" ]; then
-      echo "$console_ip"
+  # Normalize target MAC to zero-padded lowercase (xx:xx:xx:xx:xx:xx)
+  local target_mac
+  target_mac=$(echo "$mac" | awk 'BEGIN{FS=":";OFS=":"} {for(i=1;i<=NF;i++){ if(length($i)==1){$i="0"$i} else if(length($i)==0){$i="00"} else {$i=tolower($i)} } print }')
+
+  # Parse ARP table and return first matching IP by normalizing each MAC from output
+  # Works on macOS and Linux
+  local all_ips
+  all_ips=$(vm_fast_get_arp | awk -v tgt="$target_mac" '
+    {
+      ip=""; mac="";
+      # macOS: ? (192.168.1.50) at 52:54:0:64:b4:d0 on en0 ifscope [ethernet]
+      # Linux: ? (192.168.1.50) at 52:54:00:64:b4:d0 [ether] on br0
+      for (i=1;i<=NF;i++) {
+        if ($i ~ /^\(/) { gsub(/[()]/, "", $i); ip=$i; }
+        if ($i == "at") { if (i+1<=NF) { mac=$(i+1); } }
+      }
+      if (ip != "" && mac != "") {
+        # normalize mac from ARP: split, left-pad to 2, lowercase
+        n=split(mac, a, ":");
+        if (n==6) {
+          for (j=1;j<=6;j++) {
+            m=a[j];
+            gsub(/[^0-9A-Fa-f]/, "", m);
+            if (length(m)==1) m="0" m;
+            if (length(m)==0) m="00";
+            a[j]=tolower(m);
+          }
+          norm=a[1]":"a[2]":"a[3]":"a[4]":"a[5]":"a[6];
+          if (norm==tgt) { print ip; exit } # first match only
+        }
+      }
+    }')
+
+  echo "$all_ips" | head -1
+
+  # Fallback: try resolving by hostname via system resolver (macOS dscacheutil)
+  # This helps when ARP cache hasn't learned the VM yet but DNS/mDNS has
+  if [ -z "$all_ips" ] && [ "${VM_STATUS_FAST:-false}" != true ]; then
+    local hostname="$vm_name"
+    if [ -f "$vm_dir/cloud-init/user-data" ]; then
+      local ci_hn
+      ci_hn=$(grep -E "^hostname:" "$vm_dir/cloud-init/user-data" | awk '{print $2}' | tr -d '\r')
+      if [ -n "$ci_hn" ]; then hostname="$ci_hn"; fi
+    fi
+
+    if command -v dscacheutil >/dev/null 2>&1; then
+      local dns_ip
+      dns_ip=$(dscacheutil -q host -a name "$hostname" 2>/dev/null | awk '/ip_address:/ {print $2; exit}')
+      if [ -n "$dns_ip" ]; then
+        # Try to populate ARP quickly (non-fatal if it fails)
+  (timeout 1 nc -z "$dns_ip" 22 >/dev/null 2>&1 || ping -c 1 -t 1 "$dns_ip" >/dev/null 2>&1) || true
+        # Verify MAC if we can
+        local arp_line mac_out norm_out
+        arp_line=$(arp -n "$dns_ip" 2>/dev/null | head -1)
+        mac_out=$(echo "$arp_line" | awk '{for(i=1;i<=NF;i++){if($i=="at" && i+1<=NF){print $(i+1); exit}}}')
+        if [ -n "$mac_out" ]; then
+          norm_out=$(echo "$mac_out" | awk 'BEGIN{FS=":";OFS=":"} {for(i=1;i<=NF;i++){ m=$i; gsub(/[^0-9A-Fa-f]/, "", m); if(length(m)==1){m="0"m} if(length(m)==0){m="00"} $i=tolower(m)} print }')
+          if [ "$norm_out" = "$target_mac" ]; then
+            echo "$dns_ip"
+            return
+          fi
+        fi
+        # If we can't verify MAC, still return DNS IP as best effort
+        echo "$dns_ip"
+        return
+      fi
+    fi
+  fi
+}
+
+# Return all ARP IPs for a VM's MAC (space/newline separated)
+get_vm_ips_for_mac() {
+  local vm_name="$1"
+  local vm_dir="${VM_BASE_DIR}/$vm_name"
+
+  if [ ! -f "$vm_dir/${vm_name}.mac" ]; then
+    return
+  fi
+
+  local mac
+  mac=$(cat "$vm_dir/${vm_name}.mac" | tr 'A-F' 'a-f')
+  local target_mac
+  target_mac=$(echo "$mac" | awk 'BEGIN{FS=":";OFS=":"} {for(i=1;i<=NF;i++){ if(length($i)==1){$i="0"$i} else if(length($i)==0){$i="00"} else {$i=tolower($i)} } print }')
+
+  # Return all matching IPs for this MAC (space/newline separated)
+  vm_fast_get_arp | awk -v tgt="$target_mac" '
+    {
+      ip=""; mac="";
+      for (i=1;i<=NF;i++) {
+        if ($i ~ /^\(/) { gsub(/[()]/, "", $i); ip=$i; }
+        if ($i == "at") { if (i+1<=NF) { mac=$(i+1); } }
+      }
+      if (ip != "" && mac != "") {
+        n=split(mac, a, ":");
+        if (n==6) {
+          for (j=1;j<=6;j++) {
+            m=a[j];
+            gsub(/[^0-9A-Fa-f]/, "", m);
+            if (length(m)==1) m="0" m;
+            if (length(m)==0) m="00";
+            a[j]=tolower(m);
+          }
+          norm=a[1]":"a[2]":"a[3]":"a[4]":"a[5]":"a[6];
+          if (norm==tgt) { print ip }
+        }
+      }
+    }'
+}
+
+# Choose the best current IP for status display by probing SSH when needed
+get_vm_best_ip() {
+  local vm_name="$1"
+
+  # Only consider when VM is actually running
+  local vm_pid
+  vm_pid=$(get_vm_pid "$vm_name")
+  if [ -z "$vm_pid" ]; then
+    return
+  fi
+
+  local ips
+  ips=$(get_vm_ips_for_mac "$vm_name")
+  if [ -z "$ips" ]; then
+    # Fallback to DNS like get_vm_ip does
+    local vm_dir="${VM_BASE_DIR}/$vm_name"
+    local hostname="$vm_name"
+    if [ -f "$vm_dir/cloud-init/user-data" ]; then
+      local ci_hn
+      ci_hn=$(grep -E "^hostname:" "$vm_dir/cloud-init/user-data" | awk '{print $2}' | tr -d '\r')
+      if [ -n "$ci_hn" ]; then hostname="$ci_hn"; fi
+    fi
+    if command -v dscacheutil >/dev/null 2>&1; then
+      local dns_ip
+      dns_ip=$(dscacheutil -q host -a name "$hostname" 2>/dev/null | awk '/ip_address:/ {print $2; exit}')
+      if [ -n "$dns_ip" ]; then
+        ips="$dns_ip"
+      fi
+    fi
+    if [ -z "$ips" ]; then
       return
     fi
   fi
 
-  # Method 2: Try hostname resolution (works when DNS is registered)
-  local hostname_ip
-  hostname_ip=$(nslookup "$vm_name" 2>/dev/null | grep "Address:" | grep -v "#53" | head -1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}')
-  if [ -n "$hostname_ip" ]; then
-    echo "$hostname_ip"
-    return
-  fi
+  # Prefer the one that answers SSH quickly; otherwise first entry
+  for ip in $ips; do
+    if timeout 1 nc -z "$ip" 22 2>/dev/null; then
+      echo "$ip"
+      return
+    fi
+  done
 
-  # Method 4: Use arp -a but with timeout to prevent hanging (fallback)
-  # Handle MAC address format variations (macOS strips leading zeros in hex octets)
-  # Convert 52:54:00:8e:d3:f6 to pattern that matches 52:54:0:8e:d3:f6
-  local mac_no_leading_zeros
-  mac_no_leading_zeros=$(echo "$mac" | sed 's/:0\([0-9a-f]\)/:\1/g')
-
-  # Try both formats: with and without leading zeros
-  local arp_result
-  arp_result=$(timeout 2 arp -a 2>/dev/null | grep -E "($mac|$mac_no_leading_zeros)" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
-  if [ -n "$arp_result" ]; then
-    echo "$arp_result"
-  fi
+  echo "$ips" | head -1
 }
+
 
 # Sync registry - only remove missing VMs (no dynamic state updates)
 sync_registry() {

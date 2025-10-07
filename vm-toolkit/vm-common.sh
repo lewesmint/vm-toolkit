@@ -60,8 +60,8 @@ ensure_vm_exists() {
     echo "$vm_dir"
 }
 
-# Get VM PID with validation
-get_vm_pid() {
+# Get VM PID with validation (requires vm_dir parameter)
+get_vm_pid_from_dir() {
     local vm_name="$1"
     local vm_dir="$2"
     local pid_file="$vm_dir/${vm_name}.pid"
@@ -87,8 +87,8 @@ get_vm_pid() {
 is_vm_running() {
     local vm_name="$1"
     local vm_dir="$2"
-    
-    get_vm_pid "$vm_name" "$vm_dir" >/dev/null
+
+    get_vm_pid_from_dir "$vm_name" "$vm_dir" >/dev/null
 }
 
 # Ensure VM is running

@@ -22,6 +22,9 @@ Options:
   --all                 Show all VMs (default if no name specified)
   --json                Output in JSON format
   --sync                Sync registry before showing status
+  --fast                Fast mode (skip slow checks like SSH/DNS; no stats)
+  --basic               Basic mode (only PID-based; no IP/SSH; fastest)
+  --no-stats            Skip registry statistics section
   --help                Show this help
 
 Examples:
@@ -38,6 +41,9 @@ VM_NAME=""
 SHOW_ALL=true
 OUTPUT_JSON=false
 SYNC_FIRST=false
+FAST_MODE=false
+SHOW_STATS=true
+BASIC_MODE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -56,6 +62,21 @@ while [[ $# -gt 0 ]]; do
     ;;
   --sync)
     SYNC_FIRST=true
+    shift
+    ;;
+  --fast)
+    FAST_MODE=true
+    SHOW_STATS=false
+    shift
+    ;;
+  --basic)
+    BASIC_MODE=true
+    FAST_MODE=true
+    SHOW_STATS=false
+    shift
+    ;;
+  --no-stats)
+    SHOW_STATS=false
     shift
     ;;
   --help)
@@ -96,7 +117,7 @@ get_detailed_status() {
   local status
   status=$(get_vm_status "$vm_name")
   local ip
-  ip=$(get_vm_ip "$vm_name")
+  ip=$(get_vm_best_ip "$vm_name")
   local pid=""
   local uptime=""
   local ssh_status="unknown"
@@ -169,7 +190,11 @@ EOF
     echo "  Status: $status"
     echo "  Hostname: $hostname"
     echo "  Username: $username"
-    echo "  IP Address: ${ip:-N/A}"
+    if [ "$BASIC_MODE" = true ]; then
+      echo "  IP Address: N/A"
+    else
+      echo "  IP Address: ${ip:-N/A}"
+    fi
     echo "  MAC Address: $mac"
     echo "  SSH: $ssh_status"
     if [ "$status" = "running" ]; then
@@ -182,7 +207,7 @@ EOF
     echo "  Ubuntu: $ubuntu_version"
     echo "  Directory: $vm_dir"
 
-    if [ -n "$ip" ] && [ "$ssh_status" = "available" ]; then
+    if [ "$BASIC_MODE" != true ] && [ -n "$ip" ] && [ "$ssh_status" = "available" ]; then
       echo "  SSH Command: ssh $username@$hostname"
     fi
     echo
@@ -210,28 +235,34 @@ show_summary_table() {
         uptime=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || echo "unknown")
       fi
 
-      # Get IP address (potentially slow)
-      ip=$(get_vm_ip "$vm_name")
-
-      if [ -n "$ip" ] && [ "$ip" != "N/A" ]; then
-        local username="ubuntu"
-        if [ -f "$vm_dir/cloud-init/user-data" ]; then
-          username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | sed 's/.*name: *//' || echo "ubuntu")
-        fi
-
-        # Quick SSH connectivity test
-        if timeout 1 nc -z "$ip" 22 2>/dev/null; then
-          # Get hostname for SSH command
-          local vm_hostname="$vm_name"
-          if [ -f "$vm_dir/cloud-init/user-data" ]; then
-            vm_hostname=$(grep "^hostname:" "$vm_dir/cloud-init/user-data" | cut -d' ' -f2 || echo "$vm_name")
-          fi
-          ssh_cmd="ssh $username@$vm_hostname"
-        else
-          ssh_cmd="ssh not ready"
-        fi
-      else
+      # Get IP address
+      if [ "$BASIC_MODE" = true ]; then
         ip="N/A"
+        ssh_cmd="N/A"
+      elif [ "$FAST_MODE" = true ]; then
+        # Fast: avoid DNS and SSH probes
+        ip=$(get_vm_ips_for_mac "$vm_name" | head -1)
+        [ -z "$ip" ] && ip="N/A"
+        ssh_cmd="N/A"
+      else
+        ip=$(get_vm_best_ip "$vm_name")
+        if [ -n "$ip" ] && [ "$ip" != "N/A" ]; then
+          local username="ubuntu"
+          if [ -f "$vm_dir/cloud-init/user-data" ]; then
+            username=$(grep -A5 "^users:" "$vm_dir/cloud-init/user-data" | grep "name:" | head -1 | sed 's/.*name: *//' || echo "ubuntu")
+          fi
+          if timeout 1 nc -z "$ip" 22 2>/dev/null; then
+            local vm_hostname="$vm_name"
+            if [ -f "$vm_dir/cloud-init/user-data" ]; then
+              vm_hostname=$(grep "^hostname:" "$vm_dir/cloud-init/user-data" | cut -d' ' -f2 || echo "$vm_name")
+            fi
+            ssh_cmd="ssh $username@$vm_hostname"
+          else
+            ssh_cmd="ssh not ready"
+          fi
+        else
+          ip="N/A"
+        fi
       fi
     fi
 
@@ -272,7 +303,9 @@ if [ "$SHOW_ALL" = true ]; then
     echo "===================="
     show_summary_table
     echo
-    show_registry_stats
+    if [ "$SHOW_STATS" = true ]; then
+      show_registry_stats
+    fi
   fi
 else
   # Show specific VM
@@ -287,5 +320,12 @@ else
     exit 1
   fi
 
+  # Set fast mode env for downstream functions
+  if [ "$FAST_MODE" = true ]; then
+    export VM_STATUS_FAST=true
+  fi
+  if [ "$BASIC_MODE" = true ]; then
+    export VM_STATUS_BASIC=true
+  fi
   get_detailed_status "$VM_NAME"
 fi

@@ -20,7 +20,7 @@ parse_vm_operation_args "$@"
 
 # Ensure VM is in running state (not paused or stopped)
 ensure_vm_state_running "$VM_NAME" "$VM_DIR"
-PID=$(get_vm_pid "$VM_NAME" "$VM_DIR")
+PID=$(get_vm_pid_from_dir "$VM_NAME" "$VM_DIR")
 
 log "Pausing VM: $VM_NAME (PID: $PID)"
 
