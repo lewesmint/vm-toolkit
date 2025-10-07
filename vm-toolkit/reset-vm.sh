@@ -193,18 +193,19 @@ fi
 
 # Backup settings (VM is now guaranteed to be running)
 log "Backing up settings..."
+HOST_BACKUP_DIR="$VM_DIR/.reset-backup"
+mkdir -p "$HOST_BACKUP_DIR"
 if [ "$KEEP_HOME" = true ]; then
-  log "  - Preserving entire home directory" 
-  # Backup entire home directory
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
+  log "  - Preserving entire home directory (streaming to host)"
+  # Stream entire home directory to host file
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "tar -C /home -czf - $VM_USERNAME" > "$HOST_BACKUP_DIR/home-backup.tar.gz" || {
     error "Failed to backup home directory"
     exit 1
   }
-    log "Post-backup - Preserving entire home directory" 
 else
-  # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI)
+  # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI) to host
   KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
-  ssh $SSH_OPTS "$VM_USERNAME@$SSH_HOST" "
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
     set -e
     mkdir -p /tmp/keep
     for item in $KEEP_ITEMS; do
@@ -214,7 +215,6 @@ else
         cp -a \"~/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
       fi
     done
-
     # Create restore script
     cat > /tmp/keep/restore.sh << 'EOF'
 #!/bin/bash
@@ -237,8 +237,10 @@ EOF
     chmod +x /tmp/keep/restore.sh
     # Save the keep list for restore
     printf '%s\n' $KEEP_ITEMS > /tmp/keep/.list
-  " || {
-    error "Failed to backup settings"
+    # Tar up /tmp/keep to stdout
+    tar -C /tmp -czf - keep
+  " > "$HOST_BACKUP_DIR/keep-backup.tar.gz" || {
+    error "Failed to backup kept items"
     exit 1
   }
 fi
@@ -391,35 +393,53 @@ for i in {1..30}; do
   sleep 10
 done
 
-# Step 5: Clean home directory (except for kept items)
+# Step 5: Clean home directory (deferred)
+# Defer cleaning to the restore step so we can upload backups first while key-based SSH is still available.
 if [ "$KEEP_HOME" = false ]; then
-  log "Cleaning home directory (keeping items from keep.list)..."
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
-    # Remove all contents of home directory
-    sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
-
-    # Copy basic skeleton files to recreate clean home
-    sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
-    sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
-    sudo chmod 755 /home/$VM_USERNAME
-  "
+  log "Deferring home cleaning to restore step (after uploading keep-backup)"
 fi
 
 # Step 6: Restore kept settings
 log "Restoring kept settings..."
 
 if [ "$KEEP_HOME" = true ]; then
-  # Restore entire home directory
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
-    cd /home
-    sudo tar -xzf /tmp/home-backup.tar.gz
-    sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
-  "
+  # Upload home backup and restore in a single session that cleans and restores
+  if [ -f "$HOST_BACKUP_DIR/home-backup.tar.gz" ]; then
+    scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_BACKUP_DIR/home-backup.tar.gz" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/home-backup.tar.gz" || true
+    ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
+      set -e
+      # Ensure clean skeleton then restore
+      sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
+      sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
+      sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
+      # Now restore entire home
+      cd /home
+      sudo tar -xzf /tmp/home-backup.tar.gz
+      sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
+      # Fix SSH perms if present
+      [ -d /home/$VM_USERNAME/.ssh ] && chmod 700 /home/$VM_USERNAME/.ssh && chmod 600 /home/$VM_USERNAME/.ssh/* 2>/dev/null || true
+    " || log "Warning: Home restore encountered an issue"
+  else
+    log "Warning: Home backup not found; skipping restore"
+  fi
 else
-  # Restore only configured kept settings
-  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "/tmp/keep/restore.sh" 2>/dev/null || {
-    log "Warning: Could not restore settings (backup may not exist)"
-  }
+  # Upload keep backup and restore in a single session that cleans and restores
+  if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+    scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_BACKUP_DIR/keep-backup.tar.gz" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/keep-backup.tar.gz" || true
+    ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
+      set -e
+      # Clean home first
+      sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
+      sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
+      sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
+      # Extract keep payload and run restore script
+      mkdir -p /tmp
+      tar -C /tmp -xzf /tmp/keep-backup.tar.gz
+      /tmp/keep/restore.sh || true
+    " || log "Warning: Keep restore encountered an issue"
+  else
+    log "Warning: Keep backup not found; skipping restore"
+  fi
 fi
 
 log "✅ VM '$VM_NAME' reset successfully!"
