@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/vm-common.sh"
 
 show_usage() {
   cat <<EOF
-Usage: $0 <source-vm> <target-vm> [--hostname <name>] [--username <name>] [--fresh] [--force] [--reset] [--keep-home]
+Usage: $0 <source-vm> <target-vm> [--hostname <name>] [--username <name>] [--reimage] [--force] [--reset] [--keep-home]
 
 Clone an existing VM into a new VM.
 
@@ -20,7 +20,8 @@ Arguments:
 Options:
   --hostname <name>    Hostname for the new VM (default: target name)
   --username <name>    Username for the new VM (default: copy from source)
-  --fresh              Regenerate cloud-init instance-id to force reprovision
+  --reimage            Perform a HARD reset of the target after cloning: recreate overlay from base,
+                       then restore items from keep.list by default (use with --keep-home to keep full home).
   --force              Proceed even if source VM is running (not recommended)
   --reset              After cloning, run a reset on the new VM that wipes the home directory
                        except for items from keep.list (same behavior as 'vm reset' without --keep-home).
@@ -32,6 +33,7 @@ Notes:
   - The clone reuses the same base image but copies the overlay disk (qcow2).
   - A new MAC address is generated for the target VM.
   - Cloud-init user-data is updated with new hostname and username.
+  - Instance-id is always regenerated during clone so cloud-init runs on first boot.
 EOF
 }
 
@@ -43,16 +45,16 @@ SRC_VM="$1"; shift
 TGT_VM="$1"; shift
 TGT_HOSTNAME=""
 TGT_USERNAME=""
-FRESH=false
 FORCE=false
 POST_RESET=false
 POST_RESET_KEEP_HOME=false
+POST_RESET_HARD=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --hostname) TGT_HOSTNAME="$2"; shift 2 ;;
     --username) TGT_USERNAME="$2"; shift 2 ;;
-  --fresh) FRESH=true; shift ;;
+  --reimage|--hard) POST_RESET=true; POST_RESET_HARD=true; shift ;;
   --force) FORCE=true; shift ;;
   --reset) POST_RESET=true; shift ;;
   --keep-home) POST_RESET_KEEP_HOME=true; shift ;;
@@ -114,14 +116,9 @@ if [ -f "$SRC_DIR/cloud-init/user-data" ]; then
   cp "$SRC_DIR/cloud-init/user-data" "$TGT_DIR/cloud-init/user-data"
 fi
 
-# Generate new instance-id to force cloud-init re-run (if --fresh or missing)
-INSTANCE_ID=""
-if $FRESH || [ ! -f "$TGT_DIR/cloud-init/instance-id" ]; then
-  INSTANCE_ID="iid-${TGT_VM}-$(date +%s)"
-  echo "$INSTANCE_ID" > "$TGT_DIR/cloud-init/instance-id"
-else
-  INSTANCE_ID=$(cat "$TGT_DIR/cloud-init/instance-id")
-fi
+# Generate new instance-id to force cloud-init re-run (always regenerated on clone)
+INSTANCE_ID="iid-${TGT_VM}-$(date +%s)"
+echo "$INSTANCE_ID" > "$TGT_DIR/cloud-init/instance-id"
 
 # Update cloud-init configs: hostname and username
 TGT_HOSTNAME="${TGT_HOSTNAME:-$TGT_VM}"
@@ -278,11 +275,20 @@ if [ "$POST_RESET" = true ]; then
   fi
 
   if [ "$POST_RESET_KEEP_HOME" = true ]; then
-    log "Running post-clone reset (--reset --keep-home) on '$TGT_VM' (keeping entire home)..."
-    "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force --keep-home
+    if [ "$POST_RESET_HARD" = true ]; then
+  log "Running post-clone HARD reset (--reimage --keep-home) on '$TGT_VM' (reimage disk, keep full home)..."
+      "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force --hard --keep-home
+    else
+      log "Running post-clone reset (--reset --keep-home) on '$TGT_VM' (keeping entire home)..."
+      "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force --keep-home
+    fi
   else
-    log "Running post-clone reset (--reset) on '$TGT_VM' (keeping items from keep.list)..."
-    # Use --force to skip interactive confirmation; default behavior keeps only keys/configs
-    "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force
+    if [ "$POST_RESET_HARD" = true ]; then
+  log "Running post-clone HARD reset (--reimage) on '$TGT_VM' (reimage disk, keep items from keep.list)..."
+      "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force --hard
+    else
+      log "Running post-clone reset (--reset) on '$TGT_VM' (keeping items from keep.list)..."
+      "$SCRIPT_DIR/reset-vm.sh" "$TGT_VM" --force
+    fi
   fi
 fi

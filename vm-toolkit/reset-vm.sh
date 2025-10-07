@@ -44,6 +44,8 @@ Required:
 
 Options:
   --keep-home           Keep entire home directory (default: only items from keep.list)
+  --hard                Recreate the overlay disk from base image (full disk reimage)
+  --no-keep             Do not restore items from keep.list (home will be cleaned to skeleton)
   --force               Skip confirmation prompt
   --help                Show this help
 
@@ -73,12 +75,22 @@ EOF
 # Parse arguments
 VM_NAME=""
 KEEP_HOME=false
+HARD_RESET=false
+NO_KEEP=false
 FORCE_RESET=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --keep-home)
       KEEP_HOME=true
+      shift
+      ;;
+    --hard)
+      HARD_RESET=true
+      shift
+      ;;
+    --no-keep)
+      NO_KEEP=true
       shift
       ;;
     # Back-compat
@@ -117,6 +129,12 @@ if [ -z "$VM_NAME" ]; then
   exit 1
 fi
 
+# Validate incompatible options
+if [ "$KEEP_HOME" = true ] && [ "$NO_KEEP" = true ]; then
+  error "--keep-home and --no-keep cannot be used together"
+  exit 1
+fi
+
 # Check if VM exists and get directory
 VM_DIR=$(ensure_vm_exists "$VM_NAME")
 # Host backup cache dir for this VM
@@ -136,6 +154,8 @@ if [ "$FORCE_RESET" = false ]; then
   echo "What will be preserved:"
   if [ "$KEEP_HOME" = true ]; then
     echo "  ✅ Entire home directory (/home/$(get_vm_info "$VM_NAME" | jq -r '.username // "mintz"'))"
+  elif [ "$NO_KEEP" = true ]; then
+    echo "  ⚠️  No items from keep.list will be restored (home will be cleaned to skeleton)"
   else
     echo "  ✅ Items from keep list (default: ~/.ssh, ~/.gitconfig, ~/.config/gh)"
   fi
@@ -146,6 +166,9 @@ if [ "$FORCE_RESET" = false ]; then
   echo "  ❌ System configuration"
   if [ "$KEEP_HOME" = false ]; then
     echo "  ❌ Other files in home directory"
+  fi
+  if [ "$HARD_RESET" = true ]; then
+    echo "  ❌ Overlay disk will be recreated from base image (all rootfs changes discarded)"
   fi
   echo ""
   read -r -p "Continue with reset? Type 'yes' to confirm: " confirm
@@ -180,6 +203,11 @@ NEED_BACKUP=true
 if [ "$KEEP_HOME" = true ] && [ -f "$HOST_BACKUP_DIR/home-backup.tar.gz" ]; then
   NEED_BACKUP=false
 elif [ "$KEEP_HOME" = false ] && [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+  NEED_BACKUP=false
+fi
+
+# If explicitly not keeping, we don't need backups
+if [ "$NO_KEEP" = true ]; then
   NEED_BACKUP=false
 fi
 
@@ -297,6 +325,39 @@ if ps aux | grep -v grep | grep "${VM_NAME}.qcow2" >/dev/null; then
   sleep 2
 else
   log "VM process confirmed stopped"
+fi
+
+# Optional hard reset: recreate overlay from base image
+if [ "$HARD_RESET" = true ]; then
+  log "Performing HARD reset: recreating overlay from base image..."
+  cd "$VM_DIR"
+  BASE_IMG="${VM_NAME}-base.img"
+  OVERLAY_IMG="${VM_NAME}.qcow2"
+  if [ ! -f "$BASE_IMG" ]; then
+    error "Base image not found: $VM_DIR/$BASE_IMG"
+    exit 1
+  fi
+  # Determine disk virtual size from existing overlay if present; fallback to registry size
+  DISK_SIZE_ARG=""
+  if [ -f "$OVERLAY_IMG" ] && command -v qemu-img >/dev/null 2>&1; then
+    # Parse virtual size line like: "virtual size: 100G (107374182400 bytes)"
+    vs=$(qemu-img info "$OVERLAY_IMG" 2>/dev/null | grep -i "virtual size" | sed -E 's/.*\(([^ ]+) bytes\).*/\1/' ) || true
+    if [ -n "$vs" ]; then
+      # Prefer specifying same size; qemu-img create accepts bytes or with suffixes, but we'll use registry size below if available
+      :
+    fi
+  fi
+  # If registry has disk_size, use it; else default to get_disk_size
+  REG_DISK_SZ=$(get_vm_info "$VM_NAME" | jq -r '.disk_size // empty' 2>/dev/null || true)
+  if [ -n "$REG_DISK_SZ" ] && [ "$REG_DISK_SZ" != "null" ]; then
+    DISK_SIZE_ARG="$REG_DISK_SZ"
+  else
+    DISK_SIZE_ARG="$(get_disk_size)"
+  fi
+  # Remove old overlay and create a new one referencing base
+  rm -f "$OVERLAY_IMG"
+  log "Creating new overlay $OVERLAY_IMG (size: $DISK_SIZE_ARG) based on $BASE_IMG"
+  qemu-img create -f qcow2 -F qcow2 -b "$BASE_IMG" "$OVERLAY_IMG" "$DISK_SIZE_ARG" >/dev/null
 fi
 
 # Step 2: Reset with fresh instance-id
@@ -477,7 +538,32 @@ if [ "$KEEP_HOME" = true ]; then
   fi
 else
   # Upload keep backup and restore in a single session that cleans and restores
-  if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+  if [ "$NO_KEEP" = true ]; then
+    # Clean home only, seed host public key for SSH, do not restore any keep items
+    if [ -f "$HOST_PUB_KEY_PATH" ]; then
+      if scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_PUB_KEY_PATH" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/host_pub.key"; then :; else
+        warn "Failed to upload host public key; SSH access may require password after cleaning home"
+      fi
+    fi
+    ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
+      set -e
+      # Clean home first
+      sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
+      sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
+      sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
+      # Ensure host pub key is present for key-based SSH going forward
+      if [ -f /tmp/host_pub.key ]; then
+        mkdir -p /home/$VM_USERNAME/.ssh
+        touch /home/$VM_USERNAME/.ssh/authorized_keys
+        chmod 700 /home/$VM_USERNAME/.ssh
+        chmod 600 /home/$VM_USERNAME/.ssh/authorized_keys
+        if ! grep -F -x -q -f /tmp/host_pub.key /home/$VM_USERNAME/.ssh/authorized_keys 2>/dev/null; then
+          cat /tmp/host_pub.key >> /home/$VM_USERNAME/.ssh/authorized_keys
+        fi
+        chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME/.ssh
+      fi
+    " || log "Warning: Home cleanup encountered an issue"
+  elif [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
     # Upload host public key for in-session seeding (avoid later password prompts)
     if [ -f "$HOST_PUB_KEY_PATH" ]; then
       if scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_PUB_KEY_PATH" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/host_pub.key"; then :; else

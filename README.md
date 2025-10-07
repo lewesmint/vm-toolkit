@@ -164,7 +164,8 @@ vm status [--name <vm-name>]            # Show VM status with live checking
 vm console --name <vm-name>             # Connect to VM console
 vm list                                 # Quick list of all VMs
 vm destroy --name <vm-name> [options]   # Destroy a VM completely
-vm reset --name <vm-name> [options]     # Reset VM to original state (keep items from keep.list or entire home)
+vm reprovision --name <vm-name> [opts]  # Re-run cloud-init; clean home and restore keep.list (or --keep-home / --no-keep)
+vm reimage --name <vm-name> [opts]      # Recreate overlay from base (true disk reset); then restore keep.list (or --keep-home)
 vm clone <src> <tgt> [options]          # Clone an existing VM to a new one
 vm hosts-sync [--apply] [vms...]        # Sync /etc/hosts with best IPs for VMs
 vm sync                                 # Sync registry with actual VM state
@@ -431,11 +432,11 @@ vm start --name test2 &
 vm list
 ```
 
-### VM Reset (Clean Slate Development)
+### Reprovision (Clean Slate Development)
 
 ```bash
-# Reset VM to original cloud image state while keeping selected settings
-vm reset --name dev
+# Re-run cloud-init and clean home while keeping selected settings
+vm reprovision --name dev
 
 # What gets kept by default (configurable via keep.list):
 #   ✅ SSH keys (~/.ssh/)
@@ -448,8 +449,9 @@ vm reset --name dev
 #   ❌ Other files in home directory
 
 # Options:
-vm reset --name dev --force         # Skip confirmation
-vm reset --name dev --keep-home     # Keep entire home directory
+vm reprovision --name dev --force       # Skip confirmation
+vm reprovision --name dev --keep-home   # Keep entire home directory
+vm reprovision --name dev --no-keep     # Clean home without restoring keep.list items
 
 # Perfect for:
 # - Cleaning up after experiments
@@ -460,21 +462,21 @@ vm reset --name dev --keep-home     # Keep entire home directory
 ### Clone VMs
 
 ```bash
-# Clone src -> tgt, update hostname/username, and force re-provisioning
-vm clone src tgt --hostname tgt --username developer --fresh
+# Clone src -> tgt, update hostname/username; instance-id is regenerated automatically
+vm clone src tgt --hostname tgt --username developer
 
-# Clone and immediately reset the new VM, keeping only keep.list items
+# Clone and immediately reprovision (clean home, restore keep.list items)
 vm clone src tgt --reset
 
-# Clone and keep entire home on the reset (post-clone)
-vm clone src tgt --reset --keep-home
+# Clone and reimage (true disk reset), keep entire home on restore
+vm clone src tgt --reimage --keep-home
 ```
 
 Notes:
 - The overlay disk is rebased to the new base image automatically.
 - A new MAC address is generated for the target VM.
 - Safety: cloning a running VM is blocked unless `--force` is provided.
-- `--fresh` regenerates the cloud-init instance-id to re-run provisioning.
+- Clones always regenerate the cloud-init instance-id to re-run provisioning.
 
 ### Sync /etc/hosts with VM IPs
 

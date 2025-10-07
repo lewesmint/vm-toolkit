@@ -37,7 +37,8 @@ Commands:
   console               Connect to a running VM's console
   list                  Quick list of all VMs (fast, registry-only)
   destroy               Completely destroy a VM and all its data
-  reset                 Reset VM to original state (keep items from keep.list or entire home)
+  reimage               Recreate overlay disk from base image (alias: reset --hard)
+  reprovision           Re-run cloud-init provisioning (alias: reset)
   sync                  Sync registry with actual VM state
   cleanup               Remove missing VMs from registry
   help                  Show this help
@@ -113,7 +114,12 @@ case "$COMMAND" in
 "destroy")
   exec "$TOOLKIT_DIR/destroy-vm.sh" "$@"
   ;;
-"reset")
+"reimage")
+  # Alias for a full disk reimage: reset --hard
+  exec "$TOOLKIT_DIR/reset-vm.sh" --hard "$@"
+  ;;
+"reprovision")
+  # Alias for a standard reset that reprovisions via cloud-init
   exec "$TOOLKIT_DIR/reset-vm.sh" "$@"
   ;;
 "sync")
