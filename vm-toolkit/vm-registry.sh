@@ -44,6 +44,58 @@ vm_fast_get_qemu_ps() {
   fi
 }
 
+# Resolve hostname to candidate IPv4s using fast, cache-bypassing tools when possible.
+# Returns unique newline-separated IPv4 addresses. Prefer dig (bypasses OS caches),
+# then fall back to dscacheutil on macOS. Does not guarantee the IP belongs to this VM.
+resolve_dns_ipv4_candidates() {
+  local hostname="$1"
+  local out=""
+
+  local pref
+  pref=$(get_dns_preference)
+
+  # Helper to append dig results
+  _append_dig() {
+    if command -v dig >/dev/null 2>&1; then
+      local dig_out
+      dig_out=$(dig +short A "$hostname" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' || true)
+      if [ -n "$dig_out" ]; then out+="$dig_out"$'\n'; fi
+      if [[ "$hostname" != *.* ]]; then
+        local dig_local
+        dig_local=$(dig +short A "${hostname}.local" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' || true)
+        if [ -n "$dig_local" ]; then out+="$dig_local"$'\n'; fi
+      fi
+    fi
+  }
+
+  # Helper to append dscacheutil result
+  _append_dscache() {
+    if command -v dscacheutil >/dev/null 2>&1; then
+      local ds_out
+      ds_out=$(dscacheutil -q host -a name "$hostname" 2>/dev/null | awk '/ip_address:/ {print $2}')
+      if [ -n "$ds_out" ]; then out+="$ds_out"$'\n'; fi
+    fi
+  }
+
+  case "$pref" in
+    dig-first)
+      _append_dig; _append_dscache ;;
+    dscache-first)
+      _append_dscache; _append_dig ;;
+    dig-only)
+      _append_dig ;;
+    dscache-only)
+      _append_dscache ;;
+    *)
+      _append_dig; _append_dscache ;;
+  esac
+
+  # Deduplicate while preserving order
+  if [ -n "$out" ]; then
+    echo "$out" | awk '!seen[$0]++'
+  fi
+}
+
 # Extract candidate IPs from the VM console log (best-effort)
 get_vm_ips_from_console() {
   local vm_name="$1"
@@ -586,44 +638,49 @@ get_vm_best_ip() {
   local vm_dir="${VM_BASE_DIR}/$vm_name"
   local hostname="$vm_name"
   local dns_ip=""
+  # Prepare target MAC for verification of DNS entries
+  local target_mac=""
+  if [ -f "$vm_dir/${vm_name}.mac" ]; then
+    local mac
+    mac=$(cat "$vm_dir/${vm_name}.mac" | tr 'A-F' 'a-f')
+    target_mac=$(echo "$mac" | awk 'BEGIN{FS=":";OFS=":"} {for(i=1;i<=NF;i++){ if(length($i)==1){$i="0"$i} else if(length($i)==0){$i="00"} else {$i=tolower($i)} } print }')
+  fi
   if [ "${VM_STATUS_FAST:-false}" != true ]; then
     if [ -f "$vm_dir/cloud-init/user-data" ]; then
       local ci_hn
       ci_hn=$(grep -E "^hostname:" "$vm_dir/cloud-init/user-data" | awk '{print $2}' | tr -d '\r')
       if [ -n "$ci_hn" ]; then hostname="$ci_hn"; fi
     fi
-    if command -v dscacheutil >/dev/null 2>&1; then
-      dns_ip=$(dscacheutil -q host -a name "$hostname" 2>/dev/null | awk '/ip_address:/ {print $2; exit}')
-    fi
+    # Collect DNS candidates via dig and dscacheutil
+    dns_candidates=$(resolve_dns_ipv4_candidates "$hostname" 2>/dev/null || true)
   fi
 
-  # Build candidate list: prefer DNS IP first (if present), then ARP IPs
+  # Build candidate list: prefer ARP IPs that match the VM MAC; only include DNS IP if its ARP MAC matches
   local candidates=""
-  if [ -n "$dns_ip" ]; then
-    # If DNS IP doesn't respond and ARP says '(incomplete)', treat as stale and skip
-    local dns_ok=false
-    if timeout 1 nc -z "$dns_ip" 22 2>/dev/null; then
-      dns_ok=true
-    else
-      # Check ARP for incomplete entry
-      local arp_line
-      arp_line=$(arp -n "$dns_ip" 2>/dev/null | head -1)
-      if echo "$arp_line" | grep -qi '(incomplete)'; then
-        dns_ok=false
-      else
-        # If ARP has a real MAC (even if not our MAC), keep as a candidate
-        dns_ok=true
-      fi
-    fi
-    if [ "$dns_ok" = true ]; then
-      candidates="$dns_ip"
-    fi
-  fi
   if [ -n "$ips" ]; then
-    # Append ARP IPs that are not the same as dns_ip
+    # Add ARP-derived IPs first (authoritative for MAC match)
     for ip in $ips; do
-      if [ "$ip" != "$dns_ip" ]; then
-        candidates+=" $ip"
+      candidates+=" $ip"
+    done
+    candidates=$(echo "$candidates" | sed -e 's/^ *//')
+  fi
+
+  # Consider DNS IPs only if we can verify MAC matches this VM
+  if [ -n "$dns_candidates" ] && [ -n "$target_mac" ]; then
+    for dns_ip in $dns_candidates; do
+      # Nudge ARP to learn the MAC quickly (best-effort)
+      (timeout 1 nc -z "$dns_ip" 22 >/dev/null 2>&1 || ping -c 1 -t 1 "$dns_ip" >/dev/null 2>&1) || true
+      local arp_line mac_out norm_out
+      arp_line=$(arp -n "$dns_ip" 2>/dev/null | head -1)
+      mac_out=$(echo "$arp_line" | awk '{for(i=1;i<=NF;i++){if($i=="at" && i+1<=NF){print $(i+1); exit}}}')
+      if [ -n "$mac_out" ]; then
+        norm_out=$(echo "$mac_out" | awk 'BEGIN{FS=":";OFS=":"} {for(i=1;i<=NF;i++){ m=$i; gsub(/[^0-9A-Fa-f]/, "", m); if(length(m)==1){m="0"m} if(length(m)==0){m="00"} $i=tolower(m)} print }')
+        if [ "$norm_out" = "$target_mac" ]; then
+          case " $candidates " in
+            *" $dns_ip "*) :;;
+            *) candidates+=" $dns_ip" ;;
+          esac
+        fi
       fi
     done
   fi
@@ -652,12 +709,8 @@ get_vm_best_ip() {
     fi
   done
 
-  # None answered SSH: return DNS IP if present, else first ARP IP
-  if [ -n "$dns_ip" ]; then
-    echo "$dns_ip"
-  else
-    echo "$ips" | head -1
-  fi
+  # None answered SSH: return the first candidate (ARP-derived preferred)
+  for ip in $candidates; do echo "$ip"; break; done
 }
 
 

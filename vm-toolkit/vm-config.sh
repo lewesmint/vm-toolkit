@@ -183,6 +183,14 @@ get_arch() { get_config "ARCH" "$DEFAULT_ARCH"; }
 get_start_wait_for_ip() { get_config "START_WAIT_FOR_IP" "true"; }
 get_hosts_sync_on_start() { get_config "HOSTS_SYNC_ON_START" "true"; }
 
+# DNS resolver preference
+# Options:
+#  - dig-first (default): try dig for fresh DNS, then dscacheutil
+#  - dscache-first: try dscacheutil for system view first, then dig
+#  - dig-only: only dig
+#  - dscache-only: only dscacheutil
+get_dns_preference() { get_config "DNS_PREFERENCE" "dscache-first"; }
+
 # Architecture-specific configuration functions
 get_qemu_binary() {
   local arch="${1:-$(get_arch)}"

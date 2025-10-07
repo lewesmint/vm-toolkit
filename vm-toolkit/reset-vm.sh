@@ -11,6 +11,16 @@ source "$SCRIPT_DIR/vm-config.sh"
 source "$SCRIPT_DIR/vm-registry.sh"
 source "$SCRIPT_DIR/vm-common.sh"
 
+# Port check helper compatible with macOS/BSD nc
+port_check() {
+  local host="$1" port="$2" timeout_secs="${3:-3}"
+  if nc -h 2>&1 | grep -q " -G "; then
+    nc -z -G "$timeout_secs" "$host" "$port" >/dev/null 2>&1
+  else
+    nc -z -w "$timeout_secs" "$host" "$port" >/dev/null 2>&1
+  fi
+}
+
 show_usage() {
   cat << EOF
 Usage: $0 <vm-name> [options]
@@ -147,7 +157,7 @@ log "DEBUG: get_vm_status returned: $CURRENT_VM_STATUS"
 # Turn ON if needed
 if [ "$CURRENT_VM_STATUS" = "stopped" ] || [ "$CURRENT_VM_STATUS" = "missing" ]; then
   log "VM is OFF - starting to backup settings..."
-  "$SCRIPT_DIR/start-vm.sh" "$VM_NAME"
+  "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" --no-wait
 else
   log "VM is already ON - proceeding with backup..."
 fi
@@ -186,7 +196,7 @@ log "Backing up settings..."
 if [ "$KEEP_HOME" = true ]; then
   log "  - Preserving entire home directory" 
   # Backup entire home directory
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "tar -czf /tmp/home-backup.tar.gz -C /home $VM_USERNAME" || {
     error "Failed to backup home directory"
     exit 1
   }
@@ -264,7 +274,7 @@ log "Generated new instance ID: $INSTANCE_ID"
 # Step 3: Start VM (retry if locked)
 log "Starting reset VM..."
 for i in {1..10}; do
-  if "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" 2>/dev/null; then
+  if "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" --no-wait 2>/dev/null; then
     log "VM started successfully"
     break
   fi
@@ -299,16 +309,31 @@ for i in {1..30}; do
   sleep 10
 done
 
-# Wait for SSH port to be available on best IP/hostname
+# Refresh best IP after reset (DHCP may assign a new address)
+post_reset_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+if [ -n "$post_reset_ip" ] && [ "$post_reset_ip" != "${SSH_HOST:-}" ]; then
+  SSH_HOST="$post_reset_ip"
+  log "Detected new IP after reset: $SSH_HOST"
+fi
+
+# Wait for SSH port to be available on best IP/hostname, refreshing best IP if it changes
 log "Waiting for SSH to be ready on: ${SSH_HOST:-$VM_NAME}"
 for i in {1..20}; do
-  target_host="${SSH_HOST:-$VM_NAME}"
-  # refresh best IP once after a few tries
-  if [ $i -eq 5 ] && [ -z "$best_ip" ]; then
-    best_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
-    if [ -n "$best_ip" ]; then SSH_HOST="$best_ip"; fi
+  # Recompute best IP every few attempts to handle DHCP change
+  if [ $((i % 2)) -eq 0 ]; then
+    new_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+    if [ -n "$new_ip" ] && [ "$new_ip" != "${SSH_HOST:-}" ]; then
+      log "Updated best IP discovered: $new_ip (was ${SSH_HOST:-N/A})"
+      SSH_HOST="$new_ip"
+      # Update hosts mapping on change
+      if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
+        bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
+      fi
+    fi
   fi
-  if nc -z -w 3 "$target_host" 22 >/dev/null 2>&1; then
+  target_host="${SSH_HOST:-$VM_NAME}"
+  log "SSH wait attempt $i/20 on $target_host:22"
+  if port_check "$target_host" 22 3; then
     log "SSH port is ready"
     break
   fi
@@ -320,29 +345,49 @@ for i in {1..20}; do
   sleep 10
 done
 
-# Once IP is known, sync hosts to avoid DNS/ARP staleness
-if [ -n "$best_ip" ]; then
-  if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
-    log "Syncing /etc/hosts for $VM_NAME -> $best_ip (may prompt for sudo)..."
-    bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
-  fi
+# Once IP is (re)discovered, sync hosts to avoid DNS/ARP staleness
+if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
+  log "Syncing /etc/hosts mapping for $VM_NAME (may prompt for sudo)..."
+  bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
 fi
 
-# Wait for cloud-init to complete (this sets up SSH keys)
-log "Waiting for cloud-init to complete..."
+# Wait for cloud-init to complete (or reasonable readiness) before proceeding
+log "Waiting for cloud-init (or readiness) to complete..."
 for i in {1..30}; do
   target_host="${SSH_HOST:-$VM_NAME}"
-  if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "cloud-init status --wait" >/dev/null 2>&1; then
-    log "Cloud-init completed successfully"
+  log "cloud-init check $i/30 on $target_host"
+
+  # If cloud-init exists, check its state without blocking
+  if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "command -v cloud-init >/dev/null 2>&1"; then
+    # Query status (non-blocking) and parse common completed states
+    if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "cloud-init status 2>/dev/null | grep -E 'status: (done|disabled|not running)' -q"; then
+      log "Cloud-init reports completed (done/disabled/not running)"
+      break
+    fi
+
+    # Fallback quick wait on final stage with a short timeout via systemd if present
+    if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cloud-final.service"; then
+      log "cloud-final.service is active; proceeding"
+      break
+    fi
+  else
+    # cloud-init not installed; consider system ready if we can SSH
+    log "cloud-init not found; proceeding without waiting"
+    break
+  fi
+
+  # Alternative success signal used by some images
+  if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "test -f /var/lib/cloud/instance/boot-finished"; then
+    log "boot-finished marker present; proceeding"
     break
   fi
 
   if [ $i -eq 30 ]; then
-    error "Cloud-init did not complete within 5 minutes"
-    exit 1
+    warn "Cloud-init did not report completion within 5 minutes; proceeding anyway"
+    break
   fi
 
-  log "Cloud-init still running, waiting..."
+  log "Cloud-init not finished yet; waiting..."
   sleep 10
 done
 
