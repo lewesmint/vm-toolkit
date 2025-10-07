@@ -172,11 +172,13 @@ for i in {1..30}; do
   sleep 10
 done
 
-log "Using hostname for SSH: $VM_NAME"
-
-# Quick SSH port check using hostname
-if ! nc -z -w 3 "$VM_NAME" 22 >/dev/null 2>&1; then
-  log "SSH not ready yet, will wait during backup phase"
+best_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+if [ -n "$best_ip" ]; then
+  log "Using IP for SSH: $best_ip (from best-IP logic)"
+  SSH_HOST="$best_ip"
+else
+  log "Best IP not yet known; will attempt hostname and retry when ready"
+  SSH_HOST="$VM_NAME"
 fi
 
 # Backup settings (VM is now guaranteed to be running)
@@ -192,7 +194,7 @@ if [ "$KEEP_HOME" = true ]; then
 else
   # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI)
   KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
+  ssh $SSH_OPTS "$VM_USERNAME@$SSH_HOST" "
     set -e
     mkdir -p /tmp/keep
     for item in $KEEP_ITEMS; do
@@ -297,10 +299,16 @@ for i in {1..30}; do
   sleep 10
 done
 
-# Wait for SSH port to be available using hostname
-log "Waiting for SSH to be ready on hostname: $VM_NAME"
+# Wait for SSH port to be available on best IP/hostname
+log "Waiting for SSH to be ready on: ${SSH_HOST:-$VM_NAME}"
 for i in {1..20}; do
-  if nc -z -w 3 "$VM_NAME" 22 >/dev/null 2>&1; then
+  target_host="${SSH_HOST:-$VM_NAME}"
+  # refresh best IP once after a few tries
+  if [ $i -eq 5 ] && [ -z "$best_ip" ]; then
+    best_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+    if [ -n "$best_ip" ]; then SSH_HOST="$best_ip"; fi
+  fi
+  if nc -z -w 3 "$target_host" 22 >/dev/null 2>&1; then
     log "SSH port is ready"
     break
   fi
@@ -312,10 +320,19 @@ for i in {1..20}; do
   sleep 10
 done
 
+# Once IP is known, sync hosts to avoid DNS/ARP staleness
+if [ -n "$best_ip" ]; then
+  if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
+    log "Syncing /etc/hosts for $VM_NAME -> $best_ip (may prompt for sudo)..."
+    bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
+  fi
+fi
+
 # Wait for cloud-init to complete (this sets up SSH keys)
 log "Waiting for cloud-init to complete..."
 for i in {1..30}; do
-  if ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "cloud-init status --wait" >/dev/null 2>&1; then
+  target_host="${SSH_HOST:-$VM_NAME}"
+  if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "cloud-init status --wait" >/dev/null 2>&1; then
     log "Cloud-init completed successfully"
     break
   fi
@@ -332,7 +349,7 @@ done
 # Step 5: Clean home directory (except for kept items)
 if [ "$KEEP_HOME" = false ]; then
   log "Cleaning home directory (keeping items from keep.list)..."
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
     # Remove all contents of home directory
     sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
 
@@ -348,14 +365,14 @@ log "Restoring kept settings..."
 
 if [ "$KEEP_HOME" = true ]; then
   # Restore entire home directory
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
     cd /home
     sudo tar -xzf /tmp/home-backup.tar.gz
     sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
   "
 else
   # Restore only configured kept settings
-  ssh $SSH_OPTS "$VM_USERNAME@$VM_NAME" "/tmp/keep/restore.sh" 2>/dev/null || {
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "/tmp/keep/restore.sh" 2>/dev/null || {
     log "Warning: Could not restore settings (backup may not exist)"
   }
 fi

@@ -64,7 +64,24 @@ A comprehensive QEMU-based virtual machine management toolkit **exclusively for 
 - Gaming or graphics-intensive applications
 - Interactive desktop environments
 
-## 🚀 Quick Start
+## � How this toolkit differs from “similar” tools
+
+On Apple Silicon Macs, many popular tools have different goals or limitations. This toolkit is purpose-built for headless server VMs with real networking and reproducible provisioning.
+
+- Vagrant: an orchestrator, not an emulator. On Apple Silicon, mature providers (VirtualBox/VMware/Parallels) run ARM VMs only; no x86_64 guest support. Vagrant can’t give you Intel guests here without unofficial QEMU plugins. This toolkit directly uses QEMU (x86_64 via emulation or arm64 natively) with cloud-init.
+- Multipass: streamlined Ubuntu VMs, opinionated provisioning, NAT by default. This toolkit is distro-flexible with cloud-init and uses true bridge networking for first-class LAN presence.
+- Lima/Colima: optimized for container dev; VMs primarily back container runtimes. This toolkit targets full Linux server VMs with cloud-init and SSH-by-default workflows.
+- UTM: excellent GUI desktop VMs; NAT default. This toolkit is CLI-only, automation-first, and focuses on headless servers with bridge networking.
+- VMware/Parallels/VirtualBox: hypervisors; on Apple Silicon they run ARM guests. Some features require licenses, and their CLIs are different. This toolkit gives you a simple vm command, reproducible cloud-init provisioning, and integrated status/hosts-sync.
+
+Why pick this toolkit:
+- True bridge networking via vmnet with best-IP detection and optional hosts-sync.
+- Cloud-init provisioning out of the box; no bespoke agent or image format.
+- Fast/baseline status modes and SSH reachability checks that avoid stale DNS/ARP.
+- Ergonomic lifecycle: reset (keep.list or whole home), clone with post-clone reset.
+- Works for both x86_64 (emulated) and arm64 (native) VMs on Apple Silicon.
+
+## �🚀 Quick Start
 
 ### 1. Installation
 
@@ -172,7 +189,10 @@ vm start --name myvm \
   --mem 8192 \
   --vcpus 8 \
   --console        # Show console output
+  --no-wait        # Skip waiting for IP & automatic hosts-sync
 ```
+
+By default, after a background start, the toolkit waits for the VM's best IP and applies hosts-sync so the hostname resolves immediately on your Mac. Use `--no-wait` to skip this.
 
 ## ⚙️ Configuration
 
@@ -221,6 +241,16 @@ VM_USERNAME="alice" VM_MEM_MB="8192" vm create --name dev
 export VM_USERNAME="alice"
 export VM_DISK_SIZE="100G"
 vm create --name workstation
+```
+
+Start behavior toggles (optional):
+
+```bash
+# Wait for IP after start and auto-update /etc/hosts (default: true)
+export VM_START_WAIT_FOR_IP=true|false
+
+# Apply hosts-sync after start when IP is known (default: true)
+export VM_HOSTS_SYNC_ON_START=true|false
 ```
 
 ### Keep List Configuration (for Resets and Post-Clone)

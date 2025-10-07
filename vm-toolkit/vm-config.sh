@@ -177,6 +177,12 @@ get_packages() { get_config "PACKAGES" "$DEFAULT_PACKAGES"; }
 get_timeout_sec() { get_config "TIMEOUT_SEC" "$DEFAULT_TIMEOUT_SEC"; }
 get_arch() { get_config "ARCH" "$DEFAULT_ARCH"; }
 
+# Start behavior toggles
+# VM_START_WAIT_FOR_IP: if true, 'vm start' waits for best IP and runs hosts-sync (can be overridden by --no-wait)
+# VM_HOSTS_SYNC_ON_START: if true, 'vm start' will apply hosts-sync after getting IP
+get_start_wait_for_ip() { get_config "START_WAIT_FOR_IP" "true"; }
+get_hosts_sync_on_start() { get_config "HOSTS_SYNC_ON_START" "true"; }
+
 # Architecture-specific configuration functions
 get_qemu_binary() {
   local arch="${1:-$(get_arch)}"

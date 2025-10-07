@@ -15,7 +15,8 @@ show_usage() {
   show_vm_usage "$0" "Start an existing VM with bridge networking." "  --bridge <interface>  Bridge interface (default: $(get_bridge_if))
   --mem <mb>            Memory in MB (default: $(get_mem_mb))
   --vcpus <count>       vCPU count (default: auto-detected, $(get_vcpus) cores)
-  --console             Show console output (default: background)"
+  --console             Show console output (default: background)
+  --no-wait             Do not wait for IP/hosts-sync after background start"
 }
 
 # Parse script-specific arguments first
@@ -23,6 +24,7 @@ VM_BRIDGE_IF=""
 VM_MEM_MB=""
 VM_VCPUS=""
 SHOW_CONSOLE=false
+NO_WAIT=false
 
 # Parse script-specific arguments
 REMAINING_ARGS=()
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --console)
     SHOW_CONSOLE=true
+    shift
+    ;;
+  --no-wait)
+    NO_WAIT=true
     shift
     ;;
   *)
@@ -213,6 +219,40 @@ else
     log "  - View console: tail -f $(pwd)/console.log"
     log "  - Interactive console: vm console $VM_NAME"
     log "  - Stop VM: vm stop $VM_NAME"
+
+    # Optionally wait for IP and auto-fix hostname mapping via hosts-sync
+    DEFAULT_WAIT="$(get_start_wait_for_ip)"
+    DO_WAIT=$DEFAULT_WAIT
+    if [ "$NO_WAIT" = true ]; then DO_WAIT=false; fi
+    if [ "$DO_WAIT" = true ]; then
+      log "Waiting for VM IP to be discovered..."
+      # Try up to 90 seconds
+      best_ip=""
+      for i in {1..30}; do
+        best_ip=$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)
+        if [ -n "$best_ip" ]; then
+          log "Discovered IP for $VM_NAME: $best_ip"
+          break
+        fi
+        sleep 3
+      done
+
+      if [ -n "$best_ip" ]; then
+        if [ "$(get_hosts_sync_on_start)" = "true" ] && [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
+          log "Syncing /etc/hosts for $VM_NAME -> $best_ip (may prompt for sudo)..."
+          # Use bash to invoke helper consistently
+          bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || {
+            log "Warning: hosts-sync failed; you may need to run 'vm hosts-sync --apply' manually"
+          }
+        else
+          log "Skipping hosts-sync (disabled or helper not found)"
+        fi
+      else
+        log "Timeout waiting for IP; you can run 'vm hosts-sync --apply $VM_NAME' later"
+      fi
+    else
+      log "Skipping IP wait/hosts-sync (either --no-wait or config disabled)"
+    fi
   else
     error "Failed to start VM '$VM_NAME'"
     exit 1
