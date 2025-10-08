@@ -309,6 +309,48 @@ EOF
   fi
 fi
 
+# If performing a HARD reset (reimage), preserve the VM's SSH host keys
+HOST_KEYS_TARBALL="$HOST_BACKUP_DIR/ssh-host-keys.tar.gz"
+if [ "$HARD_RESET" = true ]; then
+  log "Preserving SSH host keys for this reimage (will restore after reboot)"
+  # Ensure the VM is running to fetch keys if we haven't already started it
+  VM_STATUS=$(get_vm_status "$VM_NAME")
+  if [ "$VM_STATUS" = "stopped" ] || [ "$VM_STATUS" = "missing" ]; then
+    log "VM is OFF - starting briefly to capture host keys..."
+    "$SCRIPT_DIR/start-vm.sh" "$VM_NAME" --no-wait
+    # Wait until running
+    for i in {1..18}; do
+      s=$(get_vm_status "$VM_NAME" || true)
+      if [ "$s" = "running" ]; then break; fi
+      sleep 10
+    done
+  fi
+  # Determine host/IP to connect
+  best_ip_for_keys="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
+  if [ -n "$best_ip_for_keys" ]; then
+    SSH_HOST="$best_ip_for_keys"
+  else
+    SSH_HOST="$VM_NAME"
+  fi
+  # Wait briefly for SSH (in case we just started it)
+  for i in {1..10}; do
+    if port_check "${SSH_HOST:-$VM_NAME}" 22 3; then break; fi
+    sleep 3
+  done
+  # Stream host keys to host tarball (if present)
+  if ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "ls /etc/ssh/ssh_host_* >/dev/null 2>&1"; then
+    log "Backing up SSH host keys from VM..."
+    if ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "sudo tar -C /etc/ssh -czf - ssh_host_*" > "$HOST_KEYS_TARBALL" 2>/dev/null; then
+      log "Saved host keys to $HOST_KEYS_TARBALL"
+    else
+      warn "Failed to back up SSH host keys; proceeding without preservation"
+      rm -f "$HOST_KEYS_TARBALL" || true
+    fi
+  else
+    log "No SSH host keys found to preserve; VM may not have generated them yet"
+  fi
+fi
+
 # Turn OFF for reset
 log "Stopping VM for reset..."
 "$SCRIPT_DIR/stop-vm.sh" "$VM_NAME" || {
@@ -487,6 +529,22 @@ for i in {1..30}; do
   log "Cloud-init not finished yet; waiting..."
   sleep 10
 done
+
+# If we preserved host keys during HARD reset, restore them now
+if [ "$HARD_RESET" = true ] && [ -f "$HOST_KEYS_TARBALL" ] && [ -s "$HOST_KEYS_TARBALL" ]; then
+  log "Restoring preserved SSH host keys to VM..."
+  target_host="${SSH_HOST:-$VM_NAME}"
+  scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_KEYS_TARBALL" "$VM_USERNAME@$target_host:/tmp/ssh-host-keys.tar.gz" || {
+    warn "Failed to upload host keys tarball for restore";
+  }
+  ssh $SSH_OPTS "$VM_USERNAME@$target_host" "sudo tar -xzf /tmp/ssh-host-keys.tar.gz -C /etc/ssh && \
+    sudo chown root:root /etc/ssh/ssh_host_* && \
+    sudo bash -c 'chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null || true' && \
+    sudo bash -c 'chmod 644 /etc/ssh/ssh_host_*.pub 2>/dev/null || true' && \
+    (sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || sudo service ssh reload 2>/dev/null || sudo service ssh restart 2>/dev/null || sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true)" || {
+    warn "Failed to restore SSH host keys on VM";
+  }
+fi
 
 # Step 5: Clean home directory (deferred)
 # Defer cleaning to the restore step so we can upload backups first while key-based SSH is still available.
