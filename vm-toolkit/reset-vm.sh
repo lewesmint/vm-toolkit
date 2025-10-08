@@ -633,6 +633,21 @@ if [ -f "$HOST_PUB_KEY_PATH" ]; then
   fi
 fi
 
+# If we're keeping ~/.ssh (default) then automatically copy host public and private keys into the VM
+if [ "$NO_KEEP" != true ]; then
+  if [ -f "$SCRIPT_DIR/copy-ssh-keys.sh" ]; then
+    log "Installing host SSH keys (public and private) into VM user's ~/.ssh..."
+    # Use explicit overrides when available; helper derives private from public when not specified
+    PRIV_KEY_PATH="$(get_ssh_private_key)"
+    PUB_KEY_PATH="$(get_ssh_key)"
+    if [ -n "$PRIV_KEY_PATH" ] && [ -f "$PRIV_KEY_PATH" ]; then
+      bash "$SCRIPT_DIR/copy-ssh-keys.sh" "$VM_NAME" --private "$PRIV_KEY_PATH" --public "$PUB_KEY_PATH" || log "Warning: failed to copy SSH keys automatically"
+    else
+      log "Warning: private key not found; skipping private key copy (set SSH_PRIVATE_KEY or VM_SSH_KEY)"
+    fi
+  fi
+fi
+
 # Verification: ensure all keep items exist after restore (fix up any misses like .gitconfig)
 if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
   KEEP_ITEMS_CHECK=$(get_keep_items | tr '\n' ' ')

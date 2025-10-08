@@ -563,6 +563,15 @@ EOF
   ;;
 esac
 
+# Optionally stage host private key for copy post-boot (security-sensitive)
+if [ "$(get_copy_ssh_private)" = "true" ]; then
+  HOST_PRIV_KEY="$(get_ssh_private_key)"
+  if [ -n "$HOST_PRIV_KEY" ] && [ -f "$HOST_PRIV_KEY" ]; then
+    # Copy alongside seed so start/reset scripts can install it after SSH is up
+    cp "$HOST_PRIV_KEY" cloud-init/host-ssh-private.key 2>/dev/null || true
+  fi
+fi
+
 # Copy and add custom scripts
 for script in "${VM_SCRIPTS[@]}"; do
   script_name=$(basename "$script")

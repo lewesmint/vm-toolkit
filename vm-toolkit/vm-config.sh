@@ -139,6 +139,25 @@ get_config() {
 # Helper functions for getting specific config values
 get_username() { get_config "USERNAME" "$DEFAULT_USERNAME"; }
 get_ssh_key() { get_config "SSH_KEY" "$DEFAULT_SSH_KEY"; }
+get_ssh_private_key() {
+  # Prefer explicit config; otherwise derive from public key by stripping .pub
+  local configured
+  configured=$(get_config "SSH_PRIVATE_KEY" "")
+  if [ -n "$configured" ]; then
+    echo "$configured"; return
+  fi
+  local pub
+  pub=$(get_ssh_key)
+  if [[ "$pub" == *.pub ]]; then
+    local cand="${pub%.pub}"
+    if [ -f "$cand" ]; then
+      echo "$cand"; return
+    fi
+  fi
+  # Fallback empty if not found
+  echo ""
+}
+get_copy_ssh_private() { get_config "COPY_SSH_PRIVATE_KEY" "false"; }
 get_shell() {
   # Always use /bin/bash for VMs (ignore host SHELL environment variable)
   echo "/bin/bash"
