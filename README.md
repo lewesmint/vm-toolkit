@@ -193,6 +193,20 @@ vm start --name myvm \
   --no-wait        # Skip waiting for IP (no automatic hosts-sync)
 ```
 
+# ⚠️ Note: Manual hosts-sync
+After a background start, the toolkit may wait for the VM's best IP (configurable), but it no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want to write hostname mappings to /etc/hosts.
+
+# Example:
+```
+# Preview changes
+vm hosts-sync
+# Apply changes (requires sudo)
+vm hosts-sync --apply
+```
+
+See the Networking & Name Resolution section for more details.
+```
+
 After a background start, the toolkit may wait for the VM's best IP (configurable), but it no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want to write hostname mappings to /etc/hosts.
 
 ## ⚙️ Configuration
@@ -455,6 +469,22 @@ vm reprovision --name dev --no-keep     # Clean home without restoring keep.list
 # - Starting fresh but keeping Git access
 # - Removing accumulated cruft while preserving credentials
 ```
+
+### VM Reset, Backup/Restore, and /tmp Cleanup
+
+The `vm reset` and `vm reimage` commands now feature robust backup and restore of both host and user SSH keys, as well as any files listed in your keep.list. The workflow:
+
+- Backs up selected files from the VM before reset (using tar over SSH)
+- Restores them to the correct home directory after reset/reimage
+- Handles missing keep items gracefully (no failure if a file is missing)
+- Ensures no `keep/` folder appears in the tarball (files are restored to their original locations)
+- Cleans up temporary files (`/tmp/host_pub.key`, `/tmp/ssh-host-keys.tar.gz`, `/tmp/home-backup.tar.gz`, `/tmp/keep-backup.tar.gz`) from both the VM and the host after the operation
+- Adds robust error checking: aborts on tarball corruption or restore failure
+```
+**Troubleshooting:**
+- If you need to update `/etc/hosts` after a reset or reimage, run `vm hosts-sync --apply` manually.
+- If you see errors about missing keep items, they are now non-fatal and can be ignored unless you expect those files to exist.
+- All temporary files in `/tmp` used for backup/restore are automatically deleted at the end of the reset process.
 
 ### Clone VMs
 

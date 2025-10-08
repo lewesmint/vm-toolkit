@@ -15,6 +15,11 @@ cd vm-toolkit-main
 ./install.sh
 ```
 
+**Note:**
+As of v1.2.0, the toolkit no longer updates /etc/hosts automatically after VM start or reset. Use `vm hosts-sync` manually if you want to update hostname mappings. See the README for details.
+
+The `vm reset` and `vm reimage` commands now feature robust backup/restore of SSH keys and user config, and automatically clean up all temporary files in /tmp after use. See the README for workflow details.
+
 ### From Git Clone
 
 ```bash

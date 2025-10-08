@@ -146,3 +146,5 @@ The VM toolkit now works exactly like the proven manual setup! 🎉
 - **Custom password support** for enhanced security
 - **SSH key and password authentication**
 - **Simplified cloud-init** for quick provisioning
+
+- **Robust backup/restore in reset-vm.sh**: User and host SSH keys, and all keep.list items, are reliably backed up and restored during VM reset/reimage. All temporary files in /tmp (used for backup/restore) are automatically cleaned up after use. Manual hosts-sync is now required if you want to update /etc/hosts after a reset.
