@@ -636,14 +636,16 @@ fi
 # If we're keeping ~/.ssh (default) then automatically copy host public and private keys into the VM
 if [ "$NO_KEEP" != true ]; then
   if [ -f "$SCRIPT_DIR/copy-ssh-keys.sh" ]; then
-    log "Installing host SSH keys (public and private) into VM user's ~/.ssh..."
-    # Use explicit overrides when available; helper derives private from public when not specified
-    PRIV_KEY_PATH="$(get_ssh_private_key)"
-    PUB_KEY_PATH="$(get_ssh_key)"
+    # Resolve keys using config fallbacks
+    PRIV_KEY_PATH="$(get_ssh_private_key)"; PUB_KEY_PATH="$(get_ssh_key)"
+    if [ -z "$PUB_KEY_PATH" ] || [ ! -f "$PUB_KEY_PATH" ]; then
+      log "Warning: no public key found; set SSH_KEY or ensure ~/.ssh/id_*.pub exists"
+    fi
     if [ -n "$PRIV_KEY_PATH" ] && [ -f "$PRIV_KEY_PATH" ]; then
+      log "Installing host SSH keys into VM user's ~/.ssh (key: $(basename "$PRIV_KEY_PATH"))..."
       bash "$SCRIPT_DIR/copy-ssh-keys.sh" "$VM_NAME" --private "$PRIV_KEY_PATH" --public "$PUB_KEY_PATH" || log "Warning: failed to copy SSH keys automatically"
     else
-      log "Warning: private key not found; skipping private key copy (set SSH_PRIVATE_KEY or VM_SSH_KEY)"
+      log "Warning: private key not found; skipping private key copy (set SSH_PRIVATE_KEY or provide ~/.ssh/id_*)"
     fi
   fi
 fi

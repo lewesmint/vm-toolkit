@@ -138,23 +138,64 @@ get_config() {
 
 # Helper functions for getting specific config values
 get_username() { get_config "USERNAME" "$DEFAULT_USERNAME"; }
-get_ssh_key() { get_config "SSH_KEY" "$DEFAULT_SSH_KEY"; }
-get_ssh_private_key() {
-  # Prefer explicit config; otherwise derive from public key by stripping .pub
+
+# Return a usable public key path. Preference order:
+# 1) SSH_KEY (env or user config) if set and exists
+# 2) First existing among common keys in ~/.ssh (ed25519, rsa, ecdsa, ed448)
+# 3) DEFAULT_SSH_KEY if it exists; otherwise empty
+get_ssh_key() {
   local configured
-  configured=$(get_config "SSH_PRIVATE_KEY" "")
-  if [ -n "$configured" ]; then
+  configured=$(get_config "SSH_KEY" "")
+  if [ -n "$configured" ] && [ -f "$configured" ]; then
     echo "$configured"; return
   fi
+  # Common public key filenames
+  local candidates=(
+    "$HOME/.ssh/id_ed25519.pub"
+    "$HOME/.ssh/id_rsa.pub"
+    "$HOME/.ssh/id_ecdsa.pub"
+    "$HOME/.ssh/id_ed448.pub"
+  )
+  for k in "${candidates[@]}"; do
+    if [ -f "$k" ]; then echo "$k"; return; fi
+  done
+  # Fallback to default only if it exists
+  if [ -f "$DEFAULT_SSH_KEY" ]; then
+    echo "$DEFAULT_SSH_KEY"; return
+  fi
+  echo ""
+}
+
+# Return a usable private key path. Preference order:
+# 1) SSH_PRIVATE_KEY (env or user config) if set and exists
+# 2) Derived from selected public key by stripping .pub if exists
+# 3) First existing among common private key names in ~/.ssh
+# 4) Empty if none found
+get_ssh_private_key() {
+  local configured
+  configured=$(get_config "SSH_PRIVATE_KEY" "")
+  if [ -n "$configured" ] && [ -f "$configured" ]; then
+    echo "$configured"; return
+  fi
+  # Try to derive from selected public key
   local pub
   pub=$(get_ssh_key)
-  if [[ "$pub" == *.pub ]]; then
+  if [ -n "$pub" ] && [[ "$pub" == *.pub ]]; then
     local cand="${pub%.pub}"
     if [ -f "$cand" ]; then
       echo "$cand"; return
     fi
   fi
-  # Fallback empty if not found
+  # Common private key filenames
+  local priv_candidates=(
+    "$HOME/.ssh/id_ed25519"
+    "$HOME/.ssh/id_rsa"
+    "$HOME/.ssh/id_ecdsa"
+    "$HOME/.ssh/id_ed448"
+  )
+  for k in "${priv_candidates[@]}"; do
+    if [ -f "$k" ]; then echo "$k"; return; fi
+  done
   echo ""
 }
 get_copy_ssh_private() { get_config "COPY_SSH_PRIVATE_KEY" "false"; }
