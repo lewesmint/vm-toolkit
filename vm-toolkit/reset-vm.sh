@@ -139,7 +139,18 @@ fi
 VM_DIR=$(ensure_vm_exists "$VM_NAME")
 # Host backup cache dir for this VM
 HOST_BACKUP_DIR="$VM_DIR/.reset-backup"
+# Always delete the entire backup directory before starting a new backup
+if [ -d "$HOST_BACKUP_DIR" ]; then
+  rm -rf "$HOST_BACKUP_DIR"
+fi
 mkdir -p "$HOST_BACKUP_DIR"
+# Extra: ensure no stale .ssh backups exist
+if [ -f "$HOST_BACKUP_DIR/keep-backup.tar.gz" ]; then
+  tar -tzf "$HOST_BACKUP_DIR/keep-backup.tar.gz" | grep -q ".ssh" && rm -f "$HOST_BACKUP_DIR/keep-backup.tar.gz"
+fi
+if [ -f "$HOST_BACKUP_DIR/home-backup.tar.gz" ]; then
+  tar -tzf "$HOST_BACKUP_DIR/home-backup.tar.gz" | grep -q ".ssh" && rm -f "$HOST_BACKUP_DIR/home-backup.tar.gz"
+fi
 
 # Check if VM is running
 VM_STATUS=$(get_vm_status "$VM_NAME")
@@ -265,7 +276,8 @@ if [ "$NEED_BACKUP" = true ]; then
     }
   else
     # Backup only configured keep items (default: SSH keys, Git config, GitHub CLI) to host
-    KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
+  KEEP_ITEMS=$(get_keep_items | tr '\n' ' ')
+  echo "[DEBUG] Backing up keep items: $KEEP_ITEMS"
     ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
       set -e
       KEEP_ITEMS=\"$KEEP_ITEMS\"
@@ -276,6 +288,9 @@ if [ "$NEED_BACKUP" = true ]; then
           dir=\$(dirname \"\$item\")
           mkdir -p \"/tmp/keep/\$dir\"
           cp -a \"\$HOME/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
+            if [ "\$item" = ".ssh" ]; then
+              echo '[DEBUG] Backed up .ssh directory.' >&2
+          fi
         fi
       done
       # Create restore script
@@ -313,6 +328,10 @@ fi
 HOST_KEYS_TARBALL="$HOST_BACKUP_DIR/ssh-host-keys.tar.gz"
 if [ "$HARD_RESET" = true ]; then
   log "Preserving SSH host keys for this reimage (will restore after reboot)"
+  # Always delete any existing host key backup to avoid using stale data
+  if [ -f "$HOST_KEYS_TARBALL" ]; then
+    rm -f "$HOST_KEYS_TARBALL"
+  fi
   # Ensure the VM is running to fetch keys if we haven't already started it
   VM_STATUS=$(get_vm_status "$VM_NAME")
   if [ "$VM_STATUS" = "stopped" ] || [ "$VM_STATUS" = "missing" ]; then
@@ -337,17 +356,28 @@ if [ "$HARD_RESET" = true ]; then
     if port_check "${SSH_HOST:-$VM_NAME}" 22 3; then break; fi
     sleep 3
   done
-  # Stream host keys to host tarball (if present)
-  if ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "ls /etc/ssh/ssh_host_* >/dev/null 2>&1"; then
-    log "Backing up SSH host keys from VM..."
-    if ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "sudo tar -C /etc/ssh -czf - ssh_host_*" > "$HOST_KEYS_TARBALL" 2>/dev/null; then
-      log "Saved host keys to $HOST_KEYS_TARBALL"
-    else
-      warn "Failed to back up SSH host keys; proceeding without preservation"
-      rm -f "$HOST_KEYS_TARBALL" || true
-    fi
+  # Robustly copy host keys out using tar over SSH (with shell expansion)
+  log "Backing up SSH host keys from VM (using sudo tar over SSH)..."
+  ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "cd /etc/ssh && sudo tar -czf - ssh_host_*" > "$HOST_KEYS_TARBALL"
+  if [ $? -eq 0 ] && [ -s "$HOST_KEYS_TARBALL" ]; then
+    log "Saved host keys to $HOST_KEYS_TARBALL"
   else
-    log "No SSH host keys found to preserve; VM may not have generated them yet"
+    warn "Failed to back up SSH host keys with sudo."
+    echo
+    echo "[MANUAL STEP REQUIRED]"
+    echo "The toolkit could not copy SSH host keys automatically."
+    echo "To proceed, open a new terminal and run:"
+    echo "  ssh $VM_USERNAME@${SSH_HOST:-$VM_NAME} 'cd /etc/ssh && sudo tar -czf - ssh_host_*' > $HOST_KEYS_TARBALL"
+    echo "This will prompt for your password and copy the host keys to the host."
+    echo
+    echo "After you have done this, press Enter to continue the reimage."
+    read -r -p "Press Enter to continue..." _
+    if [ ! -s "$HOST_KEYS_TARBALL" ]; then
+      warn "Host key backup still not found or empty. Skipping host key preservation."
+      rm -f "$HOST_KEYS_TARBALL" || true
+    else
+      log "Host keys copied manually. Proceeding with reimage."
+    fi
   fi
 fi
 
@@ -492,9 +522,9 @@ fi
 
 # Wait for cloud-init to complete (or reasonable readiness) before proceeding
 log "Waiting for cloud-init (or readiness) to complete..."
-for i in {1..30}; do
+for i in {1..6}; do
   target_host="${SSH_HOST:-$VM_NAME}"
-  log "cloud-init check $i/30 on $target_host"
+  log "cloud-init check $i/6 on $target_host"
 
   # If cloud-init exists, check its state without blocking
   if ssh $SSH_OPTS "$VM_USERNAME@$target_host" "command -v cloud-init >/dev/null 2>&1"; then
@@ -521,8 +551,8 @@ for i in {1..30}; do
     break
   fi
 
-  if [ $i -eq 30 ]; then
-    warn "Cloud-init did not report completion within 5 minutes; proceeding anyway"
+  if [ $i -eq 6 ]; then
+    warn "Cloud-init did not report completion within 1 minute; proceeding anyway"
     break
   fi
 
@@ -594,6 +624,7 @@ if [ "$KEEP_HOME" = true ]; then
   fi
 else
   # Upload keep backup and restore in a single session that cleans and restores
+  echo "[DEBUG] Restoring keep items (should include .ssh if present)"
   if [ "$NO_KEEP" = true ]; then
     # Clean home only, seed host public key for SSH, do not restore any keep items
     if [ -f "$HOST_PUB_KEY_PATH" ]; then
@@ -629,43 +660,44 @@ else
     scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$HOST_BACKUP_DIR/keep-backup.tar.gz" "$VM_USERNAME@${SSH_HOST:-$VM_NAME}:/tmp/keep-backup.tar.gz" || true
     ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
       set -e
-      # Clean home first
+      export HOME=/home/$VM_USERNAME
+      # Clean home
       sudo rm -rf /home/$VM_USERNAME/.[^.]* /home/$VM_USERNAME/* 2>/dev/null || true
       sudo cp -r /etc/skel/. /home/$VM_USERNAME/ 2>/dev/null || true
       sudo chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME
-      # Extract keep payload (robust to bad tar)
-      mkdir -p /tmp
+      # Restore keep-backup
       if tar -tzf /tmp/keep-backup.tar.gz >/dev/null 2>&1; then
-        tar -C /tmp -xzf /tmp/keep-backup.tar.gz || true
-      else
-        echo 'Warning: keep-backup tar appears corrupted; skipping extraction'
-      fi
-      restored=false
-      if [ -x /tmp/keep/restore.sh ]; then
-        /tmp/keep/restore.sh && restored=true || true
-      fi
-      if [ "\$restored" != true ]; then
-        echo 'Fallback restore: applying items from list'
-        if [ -f /tmp/keep/.list ]; then
-          while IFS= read -r item; do
-            [ -z "$item" ] && continue
-            if [ -e "/tmp/keep/$item" ]; then
-              mkdir -p "$(dirname "$HOME/$item")"
-              cp -a "/tmp/keep/$item" "$HOME/$item" 2>/dev/null || true
-            fi
-          done < /tmp/keep/.list
+        tar -xzf /tmp/keep-backup.tar.gz -C /home/$VM_USERNAME
+        # If keep/.ssh exists, merge its contents into .ssh
+        if [ -d /home/$VM_USERNAME/keep/.ssh ]; then
+          mkdir -p /home/$VM_USERNAME/.ssh
+          cp -a /home/$VM_USERNAME/keep/.ssh/. /home/$VM_USERNAME/.ssh/
+          rm -rf /home/$VM_USERNAME/keep/.ssh
         fi
-        [ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
+        rmdir /home/$VM_USERNAME/keep 2>/dev/null || true
+        # Fix permissions for .ssh if it exists
+        if [ -d /home/$VM_USERNAME/.ssh ]; then
+          chmod 700 /home/$VM_USERNAME/.ssh
+          chmod 600 /home/$VM_USERNAME/.ssh/* 2>/dev/null || true
+          chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME/.ssh
+        fi
+        rm -f /tmp/keep-backup.tar.gz
+        rm -rf /tmp/keep
+      else
+        echo 'Error: keep-backup tar appears corrupted; aborting restore.' >&2
+        exit 1
       fi
       # Ensure host pub key is present for key-based SSH going forward
       if [ -f /tmp/host_pub.key ]; then
-        mkdir -p ~/.ssh
-        touch ~/.ssh/authorized_keys
-        chmod 700 ~/.ssh
-        chmod 600 ~/.ssh/authorized_keys
-        if ! grep -F -x -q -f /tmp/host_pub.key ~/.ssh/authorized_keys 2>/dev/null; then
-          cat /tmp/host_pub.key >> ~/.ssh/authorized_keys
+        mkdir -p /home/$VM_USERNAME/.ssh
+        touch /home/$VM_USERNAME/.ssh/authorized_keys
+        chmod 700 /home/$VM_USERNAME/.ssh
+        chmod 600 /home/$VM_USERNAME/.ssh/authorized_keys
+        # Only append host_pub.key if not already present
+        if ! grep -F -x -q -f /tmp/host_pub.key /home/$VM_USERNAME/.ssh/authorized_keys 2>/dev/null; then
+          cat /tmp/host_pub.key >> /home/$VM_USERNAME/.ssh/authorized_keys
         fi
+        chown -R $VM_USERNAME:$VM_USERNAME /home/$VM_USERNAME/.ssh
       fi
     " || log "Warning: Keep restore encountered an issue"
   else
