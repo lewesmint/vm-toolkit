@@ -281,42 +281,8 @@ if [ "$NEED_BACKUP" = true ]; then
     ssh $SSH_OPTS "$VM_USERNAME@${SSH_HOST:-$VM_NAME}" "
       set -e
       KEEP_ITEMS=\"$KEEP_ITEMS\"
-      mkdir -p /tmp/keep
-      for item in \$KEEP_ITEMS; do
-        # Copy directories or files if they exist
-        if [ -e \"\$HOME/\$item\" ]; then
-          dir=\$(dirname \"\$item\")
-          mkdir -p \"/tmp/keep/\$dir\"
-          cp -a \"\$HOME/\$item\" \"/tmp/keep/\$item\" 2>/dev/null || true
-            if [ "\$item" = ".ssh" ]; then
-              echo '[DEBUG] Backed up .ssh directory.' >&2
-          fi
-        fi
-      done
-      # Create restore script
-      cat > /tmp/keep/restore.sh << 'EOF'
-#!/bin/bash
-set -e
-echo '🔄 Restoring kept settings...'
-KEEP_ITEMS=($(cat /tmp/keep/.list 2>/dev/null || true))
-mkdir -p ~/.config
-for item in "${KEEP_ITEMS[@]}"; do
-  src="/tmp/keep/$item"
-  dest="$HOME/$item"
-  if [ -e "$src" ]; then
-    mkdir -p "$(dirname "$dest")"
-    cp -a "$src" "$dest" 2>/dev/null || true
-  fi
-done
-# Fix common SSH perms if present
-[ -d ~/.ssh ] && chmod 700 ~/.ssh && chmod 600 ~/.ssh/* 2>/dev/null || true
-echo '✅ Kept settings restored'
-EOF
-      chmod +x /tmp/keep/restore.sh
-      # Save the keep list for restore
-      printf '%s\n' \$KEEP_ITEMS > /tmp/keep/.list
-      # Tar up /tmp/keep to stdout
-      tar -C /tmp -czf - keep
+      cd "/home/$VM_USERNAME"
+  tar --ignore-failed-read -czf - $KEEP_ITEMS
     " > "$HOST_BACKUP_DIR/keep-backup.tar.gz" || {
       error "Failed to backup kept items"
       exit 1
@@ -773,3 +739,10 @@ log ""
 log "Next steps:"
 log "  - Check status: vm status $VM_NAME"
 log "  - SSH into VM: ssh $VM_USERNAME@$VM_NAME"
+
+# Cleanup temporary files on VM and host
+target_host="${SSH_HOST:-$VM_NAME}"
+# Remove temp files from VM
+ssh $SSH_OPTS "$VM_USERNAME@$target_host" "rm -f /tmp/host_pub.key /tmp/ssh-host-keys.tar.gz /tmp/home-backup.tar.gz /tmp/keep-backup.tar.gz" 2>/dev/null || true
+# Remove temp files from host
+rm -f /tmp/host_pub.key /tmp/ssh-host-keys.tar.gz /tmp/home-backup.tar.gz /tmp/keep-backup.tar.gz 2>/dev/null || true
