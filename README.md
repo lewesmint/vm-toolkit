@@ -190,10 +190,10 @@ vm start --name myvm \
   --mem 8192 \
   --vcpus 8 \
   --console        # Show console output
-  --no-wait        # Skip waiting for IP & automatic hosts-sync
+  --no-wait        # Skip waiting for IP (no automatic hosts-sync)
 ```
 
-By default, after a background start, the toolkit waits for the VM's best IP and applies hosts-sync so the hostname resolves immediately on your Mac. Use `--no-wait` to skip this.
+After a background start, the toolkit may wait for the VM's best IP (configurable), but it no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want to write hostname mappings to /etc/hosts.
 
 ## ⚙️ Configuration
 
@@ -247,11 +247,8 @@ vm create --name workstation
 Start behavior toggles (optional):
 
 ```bash
-# Wait for IP after start and auto-update /etc/hosts (default: true)
+# Wait for IP after start (default: true)
 export VM_START_WAIT_FOR_IP=true|false
-
-# Apply hosts-sync after start when IP is known (default: true)
-export VM_HOSTS_SYNC_ON_START=true|false
 ```
 
 ### Keep List Configuration (for Resets and Post-Clone)

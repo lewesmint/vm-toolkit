@@ -422,12 +422,8 @@ for i in {1..20}; do
   if [ $((i % 2)) -eq 0 ]; then
     new_ip="$(get_vm_best_ip "$VM_NAME" 2>/dev/null || true)"
     if [ -n "$new_ip" ] && [ "$new_ip" != "${SSH_HOST:-}" ]; then
-      log "Updated best IP discovered: $new_ip (was ${SSH_HOST:-N/A})"
+  log "Updated best IP discovered: $new_ip (was ${SSH_HOST:-N/A})"
       SSH_HOST="$new_ip"
-      # Update hosts mapping on change
-      if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
-        bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
-      fi
     fi
   fi
   target_host="${SSH_HOST:-$VM_NAME}"
@@ -444,10 +440,12 @@ for i in {1..20}; do
   sleep 10
 done
 
-# Once IP is (re)discovered, sync hosts to avoid DNS/ARP staleness
-if [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
-  log "Syncing /etc/hosts mapping for $VM_NAME (may prompt for sudo)..."
-  bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || true
+# Automatic /etc/hosts updates removed; use 'vm hosts-sync --apply' manually if desired
+
+# Refresh macOS DNS caches after reset so hostname resolution is up to date on the host
+if [ -f "$SCRIPT_DIR/flush-dns.sh" ]; then
+  log "Refreshing macOS DNS caches (may prompt for sudo)..."
+  bash "$SCRIPT_DIR/flush-dns.sh" || log "DNS cache flush failed; you can run it later: $SCRIPT_DIR/flush-dns.sh"
 fi
 
 # Wait for cloud-init to complete (or reasonable readiness) before proceeding

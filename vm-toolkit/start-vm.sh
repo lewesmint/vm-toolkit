@@ -220,7 +220,6 @@ else
     log "  - Interactive console: vm console $VM_NAME"
     log "  - Stop VM: vm stop $VM_NAME"
 
-    # Optionally wait for IP and auto-fix hostname mapping via hosts-sync
     DEFAULT_WAIT="$(get_start_wait_for_ip)"
     DO_WAIT=$DEFAULT_WAIT
     if [ "$NO_WAIT" = true ]; then DO_WAIT=false; fi
@@ -237,21 +236,17 @@ else
         sleep 3
       done
 
-      if [ -n "$best_ip" ]; then
-        if [ "$(get_hosts_sync_on_start)" = "true" ] && [ -f "$SCRIPT_DIR/hosts-sync.sh" ]; then
-          log "Syncing /etc/hosts for $VM_NAME -> $best_ip (may prompt for sudo)..."
-          # Use bash to invoke helper consistently
-          bash "$SCRIPT_DIR/hosts-sync.sh" --apply "$VM_NAME" || {
-            log "Warning: hosts-sync failed; you may need to run 'vm hosts-sync --apply' manually"
-          }
-        else
-          log "Skipping hosts-sync (disabled or helper not found)"
-        fi
-      else
-        log "Timeout waiting for IP; you can run 'vm hosts-sync --apply $VM_NAME' later"
+      if [ -z "$best_ip" ]; then
+        log "Timeout waiting for IP. If hostname resolution seems stale, run the DNS cache refresh helper: '$SCRIPT_DIR/flush-dns.sh -t $VM_NAME'"
       fi
     else
-      log "Skipping IP wait/hosts-sync (either --no-wait or config disabled)"
+      log "Skipping IP wait ( --no-wait or config disabled )"
+    fi
+
+    # Always refresh macOS DNS caches on start to pick up new/changed hostnames
+    if [ -f "$SCRIPT_DIR/flush-dns.sh" ]; then
+      log "Refreshing macOS DNS caches (may prompt for sudo)..."
+      bash "$SCRIPT_DIR/flush-dns.sh" || log "DNS cache flush failed; you can run it later: $SCRIPT_DIR/flush-dns.sh"
     fi
   else
     error "Failed to start VM '$VM_NAME'"
