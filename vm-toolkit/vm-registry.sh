@@ -16,6 +16,9 @@ REGISTRY_FILE="${REGISTRY_FILE:-${VM_PROJECT_DIR}/.vm-registry.json}"
 __VM_FAST_CACHE_INIT=false
 __ARP_CACHE=""
 __QEMU_PS_CACHE=""
+# Resolve hostname to candidate IPv4s using fast, cache-bypassing tools when possible.
+# Returns unique newline-separated IPv4 addresses. Prefer dig (bypasses OS caches),
+# then fall back to dscacheutil on macOS. Does not guarantee the IP belongs to this VM.
 
 vm_fast_cache_init() {
   if [ "${VM_STATUS_FAST:-false}" = true ] && [ "$__VM_FAST_CACHE_INIT" != true ]; then
