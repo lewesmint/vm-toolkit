@@ -141,10 +141,22 @@ The VM toolkit now works exactly like the proven manual setup! 🎉
 ## 🔧 **Current Features**
 
 - **Fast VM creation and boot** (~30 seconds)
-- **Reliable networking** with bridged mode
+- **Dual network modes**: Bridged (default, LAN IPs) or Shared (NAT, isolated)
 - **Both daemon and console modes** available
 - **Custom password support** for enhanced security
 - **SSH key and password authentication**
 - **Simplified cloud-init** for quick provisioning
-
 - **Robust backup/restore in reset-vm.sh**: User and host SSH keys, and all keep.list items, are reliably backed up and restored during VM reset/reimage. All temporary files in /tmp (used for backup/restore) are automatically cleaned up after use. Manual hosts-sync is now required if you want to update /etc/hosts after a reset.
+
+---
+
+## 🌐 **Network Mode Notes**
+
+The default network mode is now **bridged** (`--net bridged`), giving VMs real LAN IPs from your router.
+
+**⚠️ WiFi Limitation**: Some routers reject DHCP from VM MAC addresses over WiFi. If VMs get `169.254.x.x` addresses:
+- Use `--net shared` for Apple's NAT networking
+- Or use Ethernet instead of WiFi
+- Or adjust router settings (e.g., BT Smart Hub 2 → Mode 2)
+
+See [networking-and-name-resolution.md](networking-and-name-resolution.md) for details.

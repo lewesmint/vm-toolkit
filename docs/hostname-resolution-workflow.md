@@ -3,6 +3,8 @@
 ## Overview
 Understanding how a VM goes from boot to having working hostname resolution (`ping fargo` works).
 
+> **Note**: This workflow assumes **bridged mode** networking where VMs get IPs from your router. In **shared mode**, VMs get `192.168.105.x` addresses from macOS vmnet instead. See [networking-and-name-resolution.md](networking-and-name-resolution.md) for network mode details.
+
 ## The Complete Workflow
 
 ### 1. VM Creation & Boot

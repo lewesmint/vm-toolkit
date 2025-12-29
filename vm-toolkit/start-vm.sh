@@ -12,14 +12,22 @@ source "$SCRIPT_DIR/vm-registry.sh"
 source "$SCRIPT_DIR/vm-common.sh"
 
 show_usage() {
-  show_vm_usage "$0" "Start an existing VM with bridge networking." "  --bridge <interface>  Bridge interface (default: $(get_bridge_if))
+  show_vm_usage "$0" "Start an existing VM." "  --net <mode>          Network mode: bridged (default), shared
+  --bridge <interface>  Bridge interface for bridged mode (default: $(get_bridge_if))
   --mem <mb>            Memory in MB (default: $(get_mem_mb))
   --vcpus <count>       vCPU count (default: auto-detected, $(get_vcpus) cores)
   --console             Show console output (default: background)
-  --no-wait             Do not wait for IP/hosts-sync after background start"
+  --no-wait             Do not wait for IP/hosts-sync after background start
+
+Network Modes:
+  bridged               VM gets IP from your router (LAN-visible, default)
+  shared                VM uses Apple NAT (192.168.105.x, isolated)
+
+See docs/networking-and-name-resolution.md for WiFi limitations."
 }
 
 # Parse script-specific arguments first
+VM_NET_MODE=""
 VM_BRIDGE_IF=""
 VM_MEM_MB=""
 VM_VCPUS=""
@@ -30,6 +38,10 @@ NO_WAIT=false
 REMAINING_ARGS=()
 while [[ $# -gt 0 ]]; do
   case $1 in
+  --net)
+    VM_NET_MODE="$2"
+    shift 2
+    ;;
   --bridge)
     VM_BRIDGE_IF="$2"
     shift 2
@@ -123,9 +135,16 @@ fi
 ensure_sudo
 
 # Set defaults
+VM_NET_MODE="${VM_NET_MODE:-bridged}"
 VM_BRIDGE_IF="${VM_BRIDGE_IF:-$(get_bridge_if)}"
 VM_MEM_MB="${VM_MEM_MB:-$(get_mem_mb)}"
 VM_VCPUS="${VM_VCPUS:-$(get_vcpus)}"
+
+# Validate network mode
+if [[ "$VM_NET_MODE" != "shared" && "$VM_NET_MODE" != "bridged" ]]; then
+  error "Invalid network mode: $VM_NET_MODE (must be 'shared' or 'bridged')"
+  exit 1
+fi
 
 # Check if VM exists (VM_DIR already set securely above)
 # Ensure VM is not already running
@@ -147,7 +166,10 @@ log "  - Architecture: $VM_ARCH"
 log "  - Memory: ${VM_MEM_MB}MB"
 log "  - vCPUs: $VM_VCPUS"
 log "  - MAC: $VM_MAC"
-log "  - Bridge: $VM_BRIDGE_IF"
+log "  - Network: $VM_NET_MODE"
+if [[ "$VM_NET_MODE" == "bridged" ]]; then
+  log "  - Bridge interface: $VM_BRIDGE_IF"
+fi
 
 # Change to VM directory
 cd "$VM_DIR"
@@ -158,6 +180,14 @@ MACHINE_TYPE=$(get_machine_type "$VM_ARCH")
 ACCELERATION=$(get_acceleration "$VM_ARCH")
 CPU_TYPE=$(get_cpu_type "$VM_ARCH")
 
+# Build network device string based on mode
+if [[ "$VM_NET_MODE" == "bridged" ]]; then
+  NETDEV_STR="vmnet-bridged,id=net0,ifname=$VM_BRIDGE_IF"
+else
+  # shared mode - Apple's NAT, VMs get 192.168.64.x
+  NETDEV_STR="vmnet-shared,id=net0"
+fi
+
 QEMU_CMD=(
   "$QEMU_BINARY"
   -machine "${MACHINE_TYPE},${ACCELERATION}"
@@ -166,7 +196,7 @@ QEMU_CMD=(
   -m "$VM_MEM_MB"
   -drive "if=virtio,file=${VM_NAME}.qcow2,discard=unmap,detect-zeroes=on,cache=writeback"
   -drive "if=virtio,format=raw,media=cdrom,file=${VM_NAME}-seed.iso"
-  -netdev "vmnet-bridged,id=net0,ifname=$VM_BRIDGE_IF"
+  -netdev "$NETDEV_STR"
   -device "virtio-net-pci,netdev=net0,mac=$VM_MAC"
 )
 

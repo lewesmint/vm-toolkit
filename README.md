@@ -187,27 +187,30 @@ vm create --name myvm \
 
 ```bash
 vm start --name myvm \
-  --mem 8192 \
-  --vcpus 8 \
-  --console        # Show console output
-  --no-wait        # Skip waiting for IP (no automatic hosts-sync)
+  --net bridged \    # Network mode: bridged (default) or shared
+  --bridge en0 \     # Bridge interface (default: en0)
+  --mem 8192 \       # Memory in MB
+  --vcpus 8 \        # CPU cores
+  --console          # Show console output (interactive mode)
+  --no-wait          # Skip waiting for IP discovery
 ```
 
-# ⚠️ Note: Manual hosts-sync
-After a background start, the toolkit may wait for the VM's best IP (configurable), but it no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want to write hostname mappings to /etc/hosts.
+**Network Modes:**
+- `--net bridged` — VM gets IP from your router (default, LAN-visible)
+- `--net shared` — VM uses Apple NAT (`192.168.105.x`, isolated)
 
-# Example:
-```
+See [Network Modes](#-network-modes) for details and WiFi troubleshooting.
+
+**⚠️ Note: Manual hosts-sync**
+
+After a background start, the toolkit waits for the VM's IP but no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want hostname mappings in `/etc/hosts`:
+
+```bash
 # Preview changes
 vm hosts-sync
 # Apply changes (requires sudo)
 vm hosts-sync --apply
 ```
-
-See the Networking & Name Resolution section for more details.
-```
-
-After a background start, the toolkit may wait for the VM's best IP (configurable), but it no longer applies hosts-sync automatically. Use `vm hosts-sync` manually if you want to write hostname mappings to /etc/hosts.
 
 ## ⚙️ Configuration
 
@@ -373,14 +376,41 @@ The toolkit automatically:
 - Downloads correct cloud images for each architecture
 - Configures QEMU with architecture-specific settings
 
-## 🌐 Bridge Networking
+## 🌐 Network Modes
 
-VMs use **true bridge networking** via macOS vmnet framework:
+VMs use Apple's **vmnet framework** with two modes:
 
-- **Real IP addresses** from your router's DHCP
+### Bridged Mode (Default)
+```bash
+vm start myvm                           # Uses bridged by default
+vm start myvm --net bridged             # Explicit bridged
+vm start myvm --net bridged --bridge en1  # Use specific interface
+```
+- **Real IP addresses** from your router's DHCP (e.g., `192.168.1.x`)
 - **Direct SSH access** on port 22 (no port forwarding)
-- **Full network connectivity** like physical machines
+- **Full LAN visibility** — VMs accessible from other machines on your network
 - **Requires sudo** for vmnet access (Apple security requirement)
+
+### Shared Mode (NAT)
+```bash
+vm start myvm --net shared
+```
+- **Apple NAT networking** — VMs get `192.168.105.x` addresses
+- **Internet access** works, but VMs not directly reachable from other LAN devices
+- **Useful when** router has DHCP issues with bridged WiFi
+
+### ⚠️ Bridged Mode over WiFi: Known Limitation
+
+**Some routers/access points reject DHCP requests from VM MAC addresses over WiFi.**
+
+**Symptoms:** VM gets `169.254.x.x` (link-local) instead of proper LAN IP.
+
+**Solutions:**
+1. **Use shared mode:** `vm start myvm --net shared`
+2. **Use Ethernet** instead of WiFi: `vm start myvm --bridge en5`
+3. **Fix router settings** — e.g., BT Smart Hub 2 requires "Mode 2" in Smart Setup
+
+See [docs/networking-and-name-resolution.md](docs/networking-and-name-resolution.md) for detailed troubleshooting
 
 ## 📁 Project Structure
 
